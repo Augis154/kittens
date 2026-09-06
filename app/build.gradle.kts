@@ -22,20 +22,20 @@ java {
 
 application {
     // Define the main class for the application.
-    mainClass = "kittens.client.Main"
+    mainClass = "kittens.client.Client"
 }
 
 // Custom task to run the Client
 tasks.register<JavaExec>("runClient") {
     group = "application"
-    mainClass = "kittens.client.Main"
+    mainClass = "kittens.client.Client"
     classpath = sourceSets["main"].runtimeClasspath
 }
 
 // Custom task to run the Server
 tasks.register<JavaExec>("runServer") {
     group = "application"
-    mainClass = "kittens.server.Main"
+    mainClass = "kittens.server.Server"
     classpath = sourceSets["main"].runtimeClasspath
     standardInput = System.`in` // Allows you to type commands into the server console
 }
