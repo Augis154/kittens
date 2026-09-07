@@ -11,8 +11,9 @@ import kittens.common.net.EntityState;
 
 /**
  * A server-simulated bullet: travels in a straight line, dies on a wall, on the first enemy or
- * player it hits (dealing damage and knockback), or when its lifetime runs out. Purely
- * authoritative — clients just draw whatever the snapshot contains.
+ * player it hits (dealing damage and, to enemies, knockback), or when its lifetime runs out.
+ * Purely authoritative — clients just draw whatever the snapshot contains. Speed, damage and
+ * lifetime come from the firing {@link kittens.common.weapon.Weapon}.
  */
 final class Projectile extends GameObject {
   private static final Vec2 BULLET_SIZE = Vec2.of(4f, 4f);
@@ -20,17 +21,20 @@ final class Projectile extends GameObject {
       Vec2.of(GameConfig.PLAYER_SIZE, GameConfig.PLAYER_SIZE);
 
   private final int ownerId;
+  private final int weaponId;
   private final Vec2 velocity;
   private final double damage;
-  private double life = GameConfig.PROJECTILE_LIFETIME;
+  private double life;
 
-  Projectile(int id, int ownerId, Vec2 pos, float angle) {
+  Projectile(int id, int ownerId, int weaponId, Vec2 pos, float angle,
+      double damage, float speed, double lifetime) {
     super(id, pos, BULLET_SIZE);
     this.ownerId = ownerId;
+    this.weaponId = weaponId;
     this.velocity =
-        Vec2.of((float) Math.cos(angle), (float) Math.sin(angle))
-            .scale(GameConfig.PROJECTILE_SPEED);
-    this.damage = GameConfig.PROJECTILE_DAMAGE;
+        Vec2.of((float) Math.cos(angle), (float) Math.sin(angle)).scale(speed);
+    this.damage = damage;
+    this.life = lifetime;
   }
 
   boolean alive() {
@@ -62,7 +66,7 @@ final class Projectile extends GameObject {
       return;
     }
 
-    // Check hit against enemies
+    // Check hit against enemies.
     if (enemies != null) {
       for (Enemy enemy : enemies) {
         if (!enemy.isAlive()) {
@@ -77,7 +81,7 @@ final class Projectile extends GameObject {
       }
     }
 
-    // Check hit against players
+    // Check hit against players.
     if (players != null) {
       for (ServerPlayer p : players) {
         if (p.id() == ownerId || p.dead()) {
@@ -97,6 +101,6 @@ final class Projectile extends GameObject {
 
   EntityState toEntityState() {
     float angle = (float) Math.atan2(velocity.y, velocity.x);
-    return new EntityState(id, "bullet", pos.x, pos.y, angle, 0f, -1);
+    return new EntityState(id, "bullet", pos.x, pos.y, angle, 0f, weaponId);
   }
 }
