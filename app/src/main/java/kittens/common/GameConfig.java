@@ -23,6 +23,25 @@ public final class GameConfig {
   /** Player movement speed in pixels per second. */
   public static final float PLAYER_SPEED = 170f;
 
+  public static final float PROJECTILE_SPEED = 430f;
+  public static final double PROJECTILE_DAMAGE = 18;
+  public static final double PROJECTILE_LIFETIME = 1.4;
+
+  /** Minimum seconds between shots while the fire button is held. */
+  public static final double FIRE_INTERVAL = 0.22;
+
+  /** Full player health. */
+  public static final double PLAYER_MAX_HEALTH = 100;
+
+  /** Seconds a downed player waits before respawning at their spawn point. */
+  public static final double RESPAWN_DELAY = 2.0;
+
+  /** Projectile entity ids start here so they never collide with player ids. */
+  public static final int PROJECTILE_ID_BASE = 1_000_000;
+
+  /** Whether projectiles can hit other players. Flips off once enemies exist to shoot instead. */
+  public static final boolean FRIENDLY_FIRE = true;
+
   /** Kitten sprite keys, assigned to players by {@code playerId % length}. */
   public static final String[] KITTEN_SPRITES = {"orange", "gray", "black", "white"};
 

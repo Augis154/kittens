@@ -1,12 +1,19 @@
 package kittens.client;
 
+import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
+import java.awt.Stroke;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.event.MouseMotionAdapter;
+import java.awt.geom.AffineTransform;
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -69,6 +76,9 @@ public final class Client extends JPanel {
   private final Map<Integer, Timer> pendingRelease = new HashMap<>();
   private float moveX;
   private float moveY;
+  private int mouseX;
+  private int mouseY;
+  private boolean firing;
   private long lastFrameNanos;
 
   public Client(GameClient client) {
@@ -76,6 +86,8 @@ public final class Client extends JPanel {
     setPreferredSize(new Dimension((int) map.pixelWidth(), (int) map.pixelHeight()));
     setBackground(FLOOR);
     setFocusable(true);
+    mouseX = (int) map.pixelWidth() / 2;
+    mouseY = (int) map.pixelHeight() / 2;
     installInput();
 
     new Timer(1000 / INPUT_HZ, e -> sendInputTick()).start();
@@ -116,6 +128,46 @@ public final class Client extends JPanel {
         grace.start();
       }
     });
+
+    MouseMotionAdapter mouse = new MouseMotionAdapter() {
+      @Override
+      public void mouseMoved(MouseEvent e) {
+        mouseX = e.getX();
+        mouseY = e.getY();
+      }
+
+      @Override
+      public void mouseDragged(MouseEvent e) {
+        mouseX = e.getX();
+        mouseY = e.getY();
+      }
+    };
+    addMouseMotionListener(mouse);
+
+    addMouseListener(new MouseAdapter() {
+      @Override
+      public void mousePressed(MouseEvent e) {
+        if (e.getButton() == MouseEvent.BUTTON1) {
+          firing = true;
+        }
+      }
+
+      @Override
+      public void mouseReleased(MouseEvent e) {
+        if (e.getButton() == MouseEvent.BUTTON1) {
+          firing = false;
+        }
+      }
+    });
+  }
+
+  /** Angle (radians, screen space) from the local player toward the cursor. */
+  private float aimAngle() {
+    Vec2 p = predicted;
+    if (p == null) {
+      return 0f;
+    }
+    return (float) Math.atan2(mouseY - p.y, mouseX - p.x);
   }
 
   private boolean down(int... codes) {
@@ -139,7 +191,7 @@ public final class Client extends JPanel {
     if (client.myPlayerId() < 0) {
       return;
     }
-    InputCommand cmd = client.sendInput(moveX, moveY, 0f, false);
+    InputCommand cmd = client.sendInput(moveX, moveY, aimAngle(), firing);
     unacked.addLast(new Pending(cmd.seq(), cmd.moveX(), cmd.moveY()));
     while (unacked.size() > 4 * INPUT_HZ) { // ~4s safety cap
       unacked.pollFirst();
@@ -200,8 +252,8 @@ public final class Client extends JPanel {
     Map<Integer, EntityState> live = client.entities();
     remotePos.keySet().removeIf(id -> id == me || !live.containsKey(id));
     for (EntityState e : live.values()) {
-      if (e.id() == me) {
-        continue;
+      if (e.id() == me || !"cat".equals(e.kind())) {
+        continue; // bullets are drawn at their raw position, not interpolated
       }
       float[] rp = remotePos.get(e.id());
       if (rp == null) {
@@ -257,37 +309,113 @@ public final class Client extends JPanel {
 
   private void drawEntities(Graphics2D g) {
     int me = client.myPlayerId();
+
+    for (EntityState e : client.entities().values()) {
+      if ("bullet".equals(e.kind())) {
+        drawBullet(g, e);
+      }
+    }
+
     for (Map.Entry<Integer, float[]> entry : remotePos.entrySet()) {
-      drawKitten(g, entry.getKey(), entry.getValue()[0], entry.getValue()[1], false);
+      int id = entry.getKey();
+      drawKitten(g, id, entry.getValue()[0], entry.getValue()[1], angleOf(id), hpOf(id), false);
     }
     if (predicted != null) {
-      drawKitten(g, me, predicted.x, predicted.y, true);
+      drawKitten(g, me, predicted.x, predicted.y, aimAngle(), hpOf(me), true);
     } else {
       EntityState mine = me < 0 ? null : client.entities().get(me);
       if (mine != null) {
-        drawKitten(g, me, mine.x(), mine.y(), true);
+        drawKitten(g, me, mine.x(), mine.y(), mine.angle(), mine.hp(), true);
       }
     }
   }
 
-  private void drawKitten(Graphics2D g, int id, float cx, float cy, boolean self) {
+  private float angleOf(int id) {
+    EntityState e = client.entities().get(id);
+    return e == null ? 0f : e.angle();
+  }
+
+  private float hpOf(int id) {
+    EntityState e = client.entities().get(id);
+    return e == null ? (float) GameConfig.PLAYER_MAX_HEALTH : e.hp();
+  }
+
+  private void drawBullet(Graphics2D g, EntityState b) {
+    int tailX = Math.round(b.x() - (float) Math.cos(b.angle()) * 9f);
+    int tailY = Math.round(b.y() - (float) Math.sin(b.angle()) * 9f);
+    Stroke saved = g.getStroke();
+    g.setColor(new Color(255, 224, 130));
+    g.setStroke(new BasicStroke(2f));
+    g.drawLine(tailX, tailY, Math.round(b.x()), Math.round(b.y()));
+    g.fillOval(Math.round(b.x()) - 2, Math.round(b.y()) - 2, 4, 4);
+    g.setStroke(saved);
+  }
+
+  private void drawKitten(
+      Graphics2D g, int id, float cx, float cy, float angle, float hp, boolean self) {
     int t = GameConfig.TILE;
     int x = Math.round(cx - t / 2f);
     int y = Math.round(cy - t / 2f);
-    if (self) {
+    boolean facingLeft = Math.cos(angle) < 0;
+    boolean dead = hp <= 0f;
+
+    if (self && !dead) {
+      g.setColor(new Color(120, 210, 255, 90));
+      g.drawLine(Math.round(cx), Math.round(cy), mouseX, mouseY);
       g.setColor(new Color(120, 210, 255));
       g.drawOval(x - 2, y - 2, t + 3, t + 3);
     }
-    g.drawImage(assets.kitten(GameConfig.kittenSprite(id)), x, y, t, t, null);
+
+    if (dead) {
+      // Downed: a faint marker where the kitten will respawn from view soon.
+      g.setColor(new Color(180, 90, 90, 120));
+      g.drawLine(x + 4, y + 4, x + t - 4, y + t - 4);
+      g.drawLine(x + t - 4, y + 4, x + 4, y + t - 4);
+      g.setColor(new Color(255, 255, 255, 120));
+      g.drawString("P" + id, x, y - 4);
+      return;
+    }
+
+    // Kitten, flipped horizontally to face the aim direction.
+    BufferedImage kitten = assets.kitten(GameConfig.kittenSprite(id));
+    if (facingLeft) {
+      g.drawImage(kitten, x + t, y, -t, t, null);
+    } else {
+      g.drawImage(kitten, x, y, t, t, null);
+    }
+
+    // Weapon, rotated around the player toward the aim angle.
+    int w = 22;
+    AffineTransform saved = g.getTransform();
+    g.translate(cx, cy);
+    g.rotate(angle);
+    if (facingLeft) {
+      g.scale(1, -1); // keep the gun upright when aiming left
+    }
+    g.drawImage(assets.weapon("pistol"), 4, -w / 2, w, w, null);
+    g.setTransform(saved);
+
+    // Health bar.
+    float frac = Math.max(0f, Math.min(1f, hp / (float) GameConfig.PLAYER_MAX_HEALTH));
+    if (frac < 1f) {
+      int bw = t;
+      int by = y - 8;
+      g.setColor(new Color(0, 0, 0, 140));
+      g.fillRect(x, by, bw, 3);
+      g.setColor(frac > 0.4f ? new Color(120, 210, 120) : new Color(220, 110, 90));
+      g.fillRect(x, by, Math.round(bw * frac), 3);
+    }
+
     g.setColor(Color.WHITE);
-    g.drawString("P" + id, x, y - 4);
+    g.drawString("P" + id, x, y - 12);
   }
 
   private void drawHud(Graphics2D g) {
     g.setColor(new Color(255, 255, 255, 180));
     int me = client.myPlayerId();
     String who = me < 0 ? "connecting…" : "you are P" + me;
-    g.drawString(who + "   —   WASD / arrow keys to move", 8, (int) map.pixelHeight() - 8);
+    g.drawString(who + "   —   WASD / arrows move · mouse aim · click to fire",
+        8, (int) map.pixelHeight() - 8);
   }
 
   public static void main(String[] args) throws IOException {
