@@ -2,6 +2,7 @@ package kittens.server;
 
 import java.util.concurrent.ConcurrentLinkedQueue;
 import kittens.common.GameConfig;
+import kittens.common.entity.Actor;
 import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
 import kittens.common.net.EntityState;
@@ -14,21 +15,17 @@ import kittens.common.sim.PlayerMotion;
  * shared {@link PlayerMotion} model and remembering the last {@code seq} it processed so the client
  * can reconcile its prediction. Also owns the fire cooldown, health and respawn timer.
  */
-final class ServerPlayer {
+final class ServerPlayer extends Actor {
   /** Fixed per-input time step — the client predicts with the exact same value. */
   static final double INPUT_DT = 1.0 / GameConfig.TICK_HZ;
 
   /** Cap catch-up so a burst of queued inputs can't teleport a player in one tick. */
   private static final int MAX_INPUTS_PER_TICK = 5;
 
-  private final int id;
   private final Vec2 spawn;
   private final ConcurrentLinkedQueue<InputCommand> inbox = new ConcurrentLinkedQueue<>();
 
-  private Vec2 pos;
-  private float aimAngle;
   private boolean firing;
-  private double health = GameConfig.PLAYER_MAX_HEALTH;
   private double fireCooldown;
   private double respawnTimer;
   private long lastProcessedSeq = -1;
@@ -36,25 +33,20 @@ final class ServerPlayer {
   private boolean fireRequested;
 
   ServerPlayer(int id, Vec2 spawn) {
-    this.id = id;
+    super(
+        id,
+        spawn,
+        Vec2.of(GameConfig.PLAYER_SIZE, GameConfig.PLAYER_SIZE),
+        GameConfig.PLAYER_MAX_HEALTH);
     this.spawn = spawn;
-    this.pos = spawn;
-  }
-
-  int id() {
-    return id;
-  }
-
-  Vec2 pos() {
-    return pos;
   }
 
   float aimAngle() {
-    return aimAngle;
+    return (float) facing;
   }
 
   boolean dead() {
-    return health <= 0;
+    return isDead();
   }
 
   long lastProcessedSeq() {
@@ -86,7 +78,7 @@ final class ServerPlayer {
         continue; // stale / duplicate
       }
       lastProcessedSeq = cmd.seq();
-      aimAngle = cmd.aimAngle();
+      facing = cmd.aimAngle();
       firing = cmd.firing();
       pos = PlayerMotion.step(map, pos, cmd.moveX(), cmd.moveY(), GameConfig.PLAYER_SPEED, INPUT_DT);
     }
@@ -104,13 +96,13 @@ final class ServerPlayer {
     return r;
   }
 
-  void damage(double amount) {
+  @Override
+  public void damage(double amount) {
     if (dead() || amount <= 0) {
       return;
     }
-    health -= amount;
-    if (health <= 0) {
-      health = 0;
+    super.damage(amount);
+    if (dead()) {
       firing = false;
       respawnTimer = GameConfig.RESPAWN_DELAY;
     }
@@ -118,10 +110,11 @@ final class ServerPlayer {
 
   private void respawn() {
     pos = spawn;
-    health = GameConfig.PLAYER_MAX_HEALTH;
+    health = maxHealth;
+    alive = true;
   }
 
   EntityState toEntityState() {
-    return new EntityState(id, "cat", pos.x, pos.y, aimAngle, (float) health, -1);
+    return new EntityState(id, "cat", pos.x, pos.y, (float) facing, (float) health, -1);
   }
 }

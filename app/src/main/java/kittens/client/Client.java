@@ -26,7 +26,6 @@ import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import kittens.common.GameConfig;
-import kittens.common.map.Tile;
 import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
 import kittens.common.net.EntityState;
@@ -37,7 +36,7 @@ import kittens.common.sim.PlayerMotion;
  * Rendering + input, with client-side prediction for the local player: input is applied to a local
  * copy of the movement model immediately (no round-trip felt), then each snapshot re-anchors that
  * prediction to the authoritative state and replays the inputs the server hasn't acknowledged yet.
- * Remote players are shown with plain snapshot interpolation.
+ * Remote players and computer-controlled enemies are shown with smooth snapshot interpolation.
  */
 public final class Client extends JPanel {
   private static final Color FLOOR = new Color(30, 30, 36);
@@ -68,7 +67,7 @@ public final class Client extends JPanel {
   private final Deque<Pending> unacked = new ArrayDeque<>();
   private long lastSnapshotVersion = -1;
 
-  // Remote players: interpolated on-screen position per id -> {x, y}.
+  // Remote entities (players & enemies): interpolated on-screen position per id -> {x, y}.
   private final Map<Integer, float[]> remotePos = new HashMap<>();
 
   // Input state (EDT only).
@@ -91,74 +90,83 @@ public final class Client extends JPanel {
     installInput();
 
     new Timer(1000 / INPUT_HZ, e -> sendInputTick()).start();
-    new Timer(1000 / FPS, e -> {
-      frame();
-      repaint();
-    }).start();
+    new Timer(
+            1000 / FPS,
+            e -> {
+              frame();
+              repaint();
+            })
+        .start();
   }
 
   // ---- input ----------------------------------------------------------------
 
   private void installInput() {
-    addKeyListener(new KeyAdapter() {
-      @Override
-      public void keyPressed(KeyEvent e) {
-        Timer grace = pendingRelease.remove(e.getKeyCode());
-        if (grace != null) {
-          grace.stop();
-        }
-        if (held.add(e.getKeyCode())) {
-          recomputeDirection();
-        }
-      }
+    addKeyListener(
+        new KeyAdapter() {
+          @Override
+          public void keyPressed(KeyEvent e) {
+            Timer grace = pendingRelease.remove(e.getKeyCode());
+            if (grace != null) {
+              grace.stop();
+            }
+            if (held.add(e.getKeyCode())) {
+              recomputeDirection();
+            }
+          }
 
-      @Override
-      public void keyReleased(KeyEvent e) {
-        // X11 autorepeat emits release+press pairs while a key is held; defer the release and
-        // cancel it if the matching press arrives, so movement doesn't stutter.
-        int code = e.getKeyCode();
-        Timer grace = new Timer(RELEASE_GRACE_MS, ev -> {
-          pendingRelease.remove(code);
-          if (held.remove(code)) {
-            recomputeDirection();
+          @Override
+          public void keyReleased(KeyEvent e) {
+            // X11 autorepeat emits release+press pairs while a key is held; defer the release and
+            // cancel it if the matching press arrives, so movement doesn't stutter.
+            int code = e.getKeyCode();
+            Timer grace =
+                new Timer(
+                    RELEASE_GRACE_MS,
+                    ev -> {
+                      pendingRelease.remove(code);
+                      if (held.remove(code)) {
+                        recomputeDirection();
+                      }
+                    });
+            grace.setRepeats(false);
+            pendingRelease.put(code, grace);
+            grace.start();
           }
         });
-        grace.setRepeats(false);
-        pendingRelease.put(code, grace);
-        grace.start();
-      }
-    });
 
-    MouseMotionAdapter mouse = new MouseMotionAdapter() {
-      @Override
-      public void mouseMoved(MouseEvent e) {
-        mouseX = e.getX();
-        mouseY = e.getY();
-      }
+    MouseMotionAdapter mouse =
+        new MouseMotionAdapter() {
+          @Override
+          public void mouseMoved(MouseEvent e) {
+            mouseX = e.getX();
+            mouseY = e.getY();
+          }
 
-      @Override
-      public void mouseDragged(MouseEvent e) {
-        mouseX = e.getX();
-        mouseY = e.getY();
-      }
-    };
+          @Override
+          public void mouseDragged(MouseEvent e) {
+            mouseX = e.getX();
+            mouseY = e.getY();
+          }
+        };
     addMouseMotionListener(mouse);
 
-    addMouseListener(new MouseAdapter() {
-      @Override
-      public void mousePressed(MouseEvent e) {
-        if (e.getButton() == MouseEvent.BUTTON1) {
-          firing = true;
-        }
-      }
+    addMouseListener(
+        new MouseAdapter() {
+          @Override
+          public void mousePressed(MouseEvent e) {
+            if (e.getButton() == MouseEvent.BUTTON1) {
+              firing = true;
+            }
+          }
 
-      @Override
-      public void mouseReleased(MouseEvent e) {
-        if (e.getButton() == MouseEvent.BUTTON1) {
-          firing = false;
-        }
-      }
-    });
+          @Override
+          public void mouseReleased(MouseEvent e) {
+            if (e.getButton() == MouseEvent.BUTTON1) {
+              firing = false;
+            }
+          }
+        });
   }
 
   /** Angle (radians, screen space) from the local player toward the cursor. */
@@ -180,10 +188,12 @@ public final class Client extends JPanel {
   }
 
   private void recomputeDirection() {
-    moveX = (down(KeyEvent.VK_D, KeyEvent.VK_RIGHT) ? 1f : 0f)
-        - (down(KeyEvent.VK_A, KeyEvent.VK_LEFT) ? 1f : 0f);
-    moveY = (down(KeyEvent.VK_S, KeyEvent.VK_DOWN) ? 1f : 0f)
-        - (down(KeyEvent.VK_W, KeyEvent.VK_UP) ? 1f : 0f);
+    moveX =
+        (down(KeyEvent.VK_D, KeyEvent.VK_RIGHT) ? 1f : 0f)
+            - (down(KeyEvent.VK_A, KeyEvent.VK_LEFT) ? 1f : 0f);
+    moveY =
+        (down(KeyEvent.VK_S, KeyEvent.VK_DOWN) ? 1f : 0f)
+            - (down(KeyEvent.VK_W, KeyEvent.VK_UP) ? 1f : 0f);
   }
 
   /** Fixed-rate: hand the current intent to the server and remember it for reconciliation. */
@@ -208,8 +218,7 @@ public final class Client extends JPanel {
     reconcile();
 
     if (predicted != null && dt > 0) {
-      predicted =
-          PlayerMotion.step(map, predicted, moveX, moveY, GameConfig.PLAYER_SPEED, dt);
+      predicted = PlayerMotion.step(map, predicted, moveX, moveY, GameConfig.PLAYER_SPEED, dt);
     }
 
     interpolateRemotes();
@@ -236,8 +245,8 @@ public final class Client extends JPanel {
 
     Vec2 target = Vec2.of(mine.x(), mine.y());
     for (Pending p : unacked) {
-      target = PlayerMotion.step(
-          map, target, p.moveX(), p.moveY(), GameConfig.PLAYER_SPEED, INPUT_DT);
+      target =
+          PlayerMotion.step(map, target, p.moveX(), p.moveY(), GameConfig.PLAYER_SPEED, INPUT_DT);
     }
 
     if (predicted == null || predicted.distance(target) > RECONCILE_SNAP) {
@@ -252,7 +261,7 @@ public final class Client extends JPanel {
     Map<Integer, EntityState> live = client.entities();
     remotePos.keySet().removeIf(id -> id == me || !live.containsKey(id));
     for (EntityState e : live.values()) {
-      if (e.id() == me || !"cat".equals(e.kind())) {
+      if (e.id() == me || "bullet".equals(e.kind())) {
         continue; // bullets are drawn at their raw position, not interpolated
       }
       float[] rp = remotePos.get(e.id());
@@ -271,8 +280,8 @@ public final class Client extends JPanel {
   protected void paintComponent(Graphics g) {
     super.paintComponent(g);
     Graphics2D g2 = (Graphics2D) g;
-    g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
-        RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+    g2.setRenderingHint(
+        RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
 
     drawMap(g2);
     drawEntities(g2);
@@ -310,16 +319,33 @@ public final class Client extends JPanel {
   private void drawEntities(Graphics2D g) {
     int me = client.myPlayerId();
 
+    // 1. Bullets
     for (EntityState e : client.entities().values()) {
       if ("bullet".equals(e.kind())) {
         drawBullet(g, e);
       }
     }
 
+    // 2. Enemies
+    for (EntityState e : client.entities().values()) {
+      if ("rat".equals(e.kind()) || "mouse".equals(e.kind())) {
+        float[] pos = remotePos.get(e.id());
+        float x = pos != null ? pos[0] : e.x();
+        float y = pos != null ? pos[1] : e.y();
+        drawEnemy(g, e, x, y);
+      }
+    }
+
+    // 3. Remote Players
     for (Map.Entry<Integer, float[]> entry : remotePos.entrySet()) {
       int id = entry.getKey();
-      drawKitten(g, id, entry.getValue()[0], entry.getValue()[1], angleOf(id), hpOf(id), false);
+      EntityState e = client.entities().get(id);
+      if (e != null && "cat".equals(e.kind())) {
+        drawKitten(g, id, entry.getValue()[0], entry.getValue()[1], angleOf(id), hpOf(id), false);
+      }
     }
+
+    // 4. Local Player
     if (predicted != null) {
       drawKitten(g, me, predicted.x, predicted.y, aimAngle(), hpOf(me), true);
     } else {
@@ -349,6 +375,36 @@ public final class Client extends JPanel {
     g.drawLine(tailX, tailY, Math.round(b.x()), Math.round(b.y()));
     g.fillOval(Math.round(b.x()) - 2, Math.round(b.y()) - 2, 4, 4);
     g.setStroke(saved);
+  }
+
+  private void drawEnemy(Graphics2D g, EntityState e, float cx, float cy) {
+    int t = GameConfig.TILE;
+    int x = Math.round(cx - t / 2f);
+    int y = Math.round(cy - t / 2f);
+    boolean facingLeft = Math.cos(e.angle()) < 0;
+
+    BufferedImage img = assets.enemy(e.kind());
+    if (img != null) {
+      if (facingLeft) {
+        g.drawImage(img, x + t, y, -t, t, null);
+      } else {
+        g.drawImage(img, x, y, t, t, null);
+      }
+    }
+
+    // Health bar above enemy
+    double maxHp =
+        "mouse".equals(e.kind()) ? GameConfig.MOUSE_MAX_HEALTH : GameConfig.RAT_MAX_HEALTH;
+    float frac = Math.clamp(e.hp() / (float) maxHp, 0f, 1f);
+    if (frac < 1f && frac > 0f) {
+      int bw = Math.round(t * 0.75f);
+      int bx = Math.round(cx - bw / 2f);
+      int by = y - 5;
+      g.setColor(new Color(0, 0, 0, 160));
+      g.fillRect(bx, by, bw, 3);
+      g.setColor(new Color(230, 70, 70));
+      g.fillRect(bx, by, Math.round(bw * frac), 3);
+    }
   }
 
   private void drawKitten(
@@ -396,7 +452,7 @@ public final class Client extends JPanel {
     g.setTransform(saved);
 
     // Health bar.
-    float frac = Math.max(0f, Math.min(1f, hp / (float) GameConfig.PLAYER_MAX_HEALTH));
+    float frac = Math.clamp(hp / (float) GameConfig.PLAYER_MAX_HEALTH, 0f, 1f);
     if (frac < 1f) {
       int bw = t;
       int by = y - 8;
@@ -414,8 +470,17 @@ public final class Client extends JPanel {
     g.setColor(new Color(255, 255, 255, 180));
     int me = client.myPlayerId();
     String who = me < 0 ? "connecting…" : "you are P" + me;
-    g.drawString(who + "   —   WASD / arrows move · mouse aim · click to fire",
-        8, (int) map.pixelHeight() - 8);
+    long enemyCount =
+        client.entities().values().stream()
+            .filter(e -> "rat".equals(e.kind()) || "mouse".equals(e.kind()))
+            .count();
+    g.drawString(
+        who
+            + "   ·   Enemies: "
+            + enemyCount
+            + "   —   WASD / arrows move · mouse aim · click to fire",
+        8,
+        (int) map.pixelHeight() - 8);
   }
 
   public static void main(String[] args) throws IOException {
@@ -423,14 +488,15 @@ public final class Client extends JPanel {
     GameClient client = new GameClient(host, GameConfig.PORT);
     client.start();
 
-    SwingUtilities.invokeLater(() -> {
-      JFrame frame = new JFrame("Kittens");
-      frame.add(new Client(client));
-      frame.pack();
-      frame.setResizable(false);
-      frame.setLocationRelativeTo(null);
-      frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-      frame.setVisible(true);
-    });
+    SwingUtilities.invokeLater(
+        () -> {
+          JFrame frame = new JFrame("Kittens");
+          frame.add(new Client(client));
+          frame.pack();
+          frame.setResizable(false);
+          frame.setLocationRelativeTo(null);
+          frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+          frame.setVisible(true);
+        });
   }
 }

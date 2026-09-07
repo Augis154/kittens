@@ -17,6 +17,11 @@ public final class PlayerMotion {
   private PlayerMotion() {}
 
   public static Vec2 step(TileMap map, Vec2 pos, float moveX, float moveY, float speed, double dt) {
+    return step(map, pos, BOX, moveX, moveY, speed, dt);
+  }
+
+  public static Vec2 step(
+      TileMap map, Vec2 pos, Vec2 boxSize, float moveX, float moveY, float speed, double dt) {
     Vec2 dir = Vec2.of(moveX, moveY);
     float len = dir.length();
     if (len < 1e-4f || dt <= 0) {
@@ -26,24 +31,24 @@ public final class PlayerMotion {
       dir = dir.scale(1f / len); // equal speed on the diagonals
     }
     Vec2 delta = dir.scale((float) (speed * dt));
-    Vec2 next = moveAxis(map, pos, delta.x, 0f);
-    return moveAxis(map, next, 0f, delta.y);
+    Vec2 next = moveAxis(map, pos, boxSize, delta.x, 0f);
+    return moveAxis(map, next, boxSize, 0f, delta.y);
   }
 
   /**
    * Move by ({@code dx}, {@code dy}) if clear; otherwise binary-search the largest fraction of the
    * step that stays clear so the actor ends up flush against the wall.
    */
-  private static Vec2 moveAxis(TileMap map, Vec2 from, float dx, float dy) {
+  private static Vec2 moveAxis(TileMap map, Vec2 from, Vec2 boxSize, float dx, float dy) {
     Vec2 target = from.add(Vec2.of(dx, dy));
-    if (!map.overlapsWall(Aabb.fromCenter(target, BOX))) {
+    if (!map.overlapsWall(Aabb.fromCenter(target, boxSize))) {
       return target;
     }
     float clear = 0f;
     float blocked = 1f;
     for (int i = 0; i < 6; i++) {
       float mid = (clear + blocked) * 0.5f;
-      if (map.overlapsWall(Aabb.fromCenter(from.add(Vec2.of(dx * mid, dy * mid)), BOX))) {
+      if (map.overlapsWall(Aabb.fromCenter(from.add(Vec2.of(dx * mid, dy * mid)), boxSize))) {
         blocked = mid;
       } else {
         clear = mid;
