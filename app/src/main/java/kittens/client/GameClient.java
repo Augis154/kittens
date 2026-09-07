@@ -10,7 +10,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
-import kittens.common.GameConfig;
 import kittens.common.net.EntityState;
 import kittens.common.net.InputCommand;
 import kittens.common.net.Join;
@@ -21,7 +20,7 @@ import kittens.common.net.Snapshot;
 
 /**
  * The client's network half: connects, sends {@link Join} then a stream of {@link InputCommand}s,
- * and keeps the most recent {@link Snapshot}'s entities in a concurrent map the renderer reads.
+ * and exposes the latest {@link Snapshot} (entities + input ack) for the renderer and predictor.
  */
 final class GameClient {
   private final BufferedReader in;
@@ -30,6 +29,8 @@ final class GameClient {
 
   private volatile int myPlayerId = -1;
   private final Map<Integer, EntityState> entities = new ConcurrentHashMap<>();
+  private volatile long ackSeq = -1;
+  private final AtomicLong snapshotVersion = new AtomicLong();
 
   GameClient(String host, int port) throws IOException {
     Socket socket = new Socket(host, port);
@@ -38,7 +39,7 @@ final class GameClient {
     out = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
   }
 
-  void start() throws IOException {
+  void start() {
     send(new Join("kitten"));
     Thread reader = new Thread(this::readLoop, "client-net");
     reader.setDaemon(true);
@@ -53,9 +54,22 @@ final class GameClient {
     return entities;
   }
 
-  /** Send the current movement intent. {@code moveX}/{@code moveY} are each in [-1, 1]. */
-  void sendInput(float moveX, float moveY, float aimAngle, boolean firing) {
-    send(new InputCommand(moveX, moveY, aimAngle, firing, inputSeq.getAndIncrement()));
+  /** Seq of the last input the server has confirmed applying for us. */
+  long ackSeq() {
+    return ackSeq;
+  }
+
+  /** Bumps on every snapshot; the predictor reconciles when it changes. */
+  long snapshotVersion() {
+    return snapshotVersion.get();
+  }
+
+  /** Send the current movement intent and return the command (its {@code seq} is needed for replay). */
+  InputCommand sendInput(float moveX, float moveY, float aimAngle, boolean firing) {
+    InputCommand cmd =
+        new InputCommand(moveX, moveY, aimAngle, firing, inputSeq.getAndIncrement());
+    send(cmd);
+    return cmd;
   }
 
   private synchronized void send(Message message) {
@@ -72,10 +86,9 @@ final class GameClient {
     try {
       String line;
       while ((line = in.readLine()) != null) {
-        if (line.isBlank()) {
-          continue;
+        if (!line.isBlank()) {
+          handle(MessageCodec.decode(line));
         }
-        handle(MessageCodec.decode(line));
       }
     } catch (IOException e) {
       System.err.println("connection closed: " + e);
@@ -91,9 +104,11 @@ final class GameClient {
         for (EntityState e : snapshot.entities()) {
           entities.put(e.id(), e);
         }
+        ackSeq = snapshot.ackSeq();
+        snapshotVersion.incrementAndGet();
       }
       default -> {
-        // Join / InputCommand are client -> server only; ignore if echoed.
+        // Join / InputCommand are client -> server only.
       }
     }
   }

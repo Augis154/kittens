@@ -45,16 +45,22 @@ final class GameWorld {
   void tick(double dt) {
     tick.incrementAndGet();
     for (ServerPlayer p : players.values()) {
-      p.integrate(dt, map);
+      p.tick(map);
     }
   }
 
-  Snapshot snapshot() {
+  /**
+   * The world as {@code viewerId} should see it: entity states plus the last input seq the server
+   * has applied for that viewer, so their client can reconcile its prediction.
+   */
+  Snapshot snapshotFor(int viewerId) {
     List<EntityState> entities = new ArrayList<>(players.size());
     for (ServerPlayer p : players.values()) {
       entities.add(p.toEntityState());
     }
-    return new Snapshot(tick.get(), entities);
+    ServerPlayer viewer = players.get(viewerId);
+    long ackSeq = viewer == null ? -1 : viewer.lastProcessedSeq();
+    return new Snapshot(tick.get(), ackSeq, entities);
   }
 
   String mapId() {

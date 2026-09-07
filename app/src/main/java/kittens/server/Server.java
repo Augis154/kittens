@@ -68,9 +68,9 @@ public final class Server {
 
   private void tick(double dt) {
     world.tick(dt);
-    Snapshot snapshot = world.snapshot();
+    // Each client gets its own snapshot so ackSeq reflects that client's processed input.
     for (ClientConnection conn : connections) {
-      conn.send(snapshot);
+      conn.send(world.snapshotFor(conn.playerId()));
     }
   }
 }

@@ -1,30 +1,33 @@
 package kittens.server;
 
+import java.util.concurrent.ConcurrentLinkedQueue;
 import kittens.common.GameConfig;
 import kittens.common.map.TileMap;
-import kittens.common.math.Aabb;
 import kittens.common.math.Vec2;
 import kittens.common.net.EntityState;
 import kittens.common.net.InputCommand;
+import kittens.common.sim.PlayerMotion;
 
 /**
- * The server's authoritative view of one player. Holds position and the latest input; movement is
- * integrated once per world tick with axis-separated wall sliding.
+ * The server's authoritative view of one player. Inputs land in a queue from the connection's
+ * reader thread; the world-loop thread drains them each tick, applying every command through the
+ * shared {@link PlayerMotion} model and remembering the last {@code seq} it processed so the client
+ * can reconcile its prediction.
  */
 final class ServerPlayer {
-  private static final Vec2 BOX = Vec2.of(GameConfig.PLAYER_SIZE, GameConfig.PLAYER_SIZE);
+  /** Fixed per-input time step — the client predicts with the exact same value. */
+  static final double INPUT_DT = 1.0 / GameConfig.TICK_HZ;
+
+  /** Cap catch-up so a burst of queued inputs can't teleport a player in one tick. */
+  private static final int MAX_INPUTS_PER_TICK = 5;
 
   private final int id;
+  private final ConcurrentLinkedQueue<InputCommand> inbox = new ConcurrentLinkedQueue<>();
 
   private Vec2 pos;
   private float aimAngle;
   private double health = 100;
-
-  // Written by the connection's reader thread, read by the world-loop thread.
-  private volatile float wishX;
-  private volatile float wishY;
-  private volatile float wishAim;
-  private volatile long lastSeq = -1;
+  private long lastProcessedSeq = -1;
 
   ServerPlayer(int id, Vec2 spawn) {
     this.id = id;
@@ -35,55 +38,27 @@ final class ServerPlayer {
     return id;
   }
 
-  /** Store the newest input, ignoring packets that arrive out of order. */
+  long lastProcessedSeq() {
+    return lastProcessedSeq;
+  }
+
   void acceptInput(InputCommand cmd) {
-    if (cmd.seq() <= lastSeq) {
-      return;
-    }
-    lastSeq = cmd.seq();
-    wishX = cmd.moveX();
-    wishY = cmd.moveY();
-    wishAim = cmd.aimAngle();
+    inbox.add(cmd);
   }
 
-  void integrate(double dt, TileMap map) {
-    aimAngle = wishAim;
-
-    Vec2 dir = Vec2.of(wishX, wishY);
-    float len = dir.length();
-    if (len < 1e-4f) {
-      return;
-    }
-    if (len > 1f) {
-      dir = dir.scale(1f / len); // keep diagonal speed equal to cardinal speed
-    }
-    Vec2 step = dir.scale((float) (GameConfig.PLAYER_SPEED * dt));
-
-    // Resolve one axis at a time so the player slides along a wall instead of sticking to it.
-    pos = moveAxis(map, pos, step.x, 0f);
-    pos = moveAxis(map, pos, 0f, step.y);
-  }
-
-  /**
-   * Move by ({@code dx}, {@code dy}) if clear; if a wall is in the way, binary-search the largest
-   * fraction of the step that stays clear so the player ends up flush against it.
-   */
-  private static Vec2 moveAxis(TileMap map, Vec2 from, float dx, float dy) {
-    Vec2 target = from.add(Vec2.of(dx, dy));
-    if (!map.overlapsWall(Aabb.fromCenter(target, BOX))) {
-      return target;
-    }
-    float clear = 0f;
-    float blocked = 1f;
-    for (int i = 0; i < 6; i++) {
-      float mid = (clear + blocked) * 0.5f;
-      if (map.overlapsWall(Aabb.fromCenter(from.add(Vec2.of(dx * mid, dy * mid)), BOX))) {
-        blocked = mid;
-      } else {
-        clear = mid;
+  void tick(TileMap map) {
+    for (int applied = 0; applied < MAX_INPUTS_PER_TICK; applied++) {
+      InputCommand cmd = inbox.poll();
+      if (cmd == null) {
+        break;
       }
+      if (cmd.seq() <= lastProcessedSeq) {
+        continue; // stale / duplicate
+      }
+      lastProcessedSeq = cmd.seq();
+      aimAngle = cmd.aimAngle();
+      pos = PlayerMotion.step(map, pos, cmd.moveX(), cmd.moveY(), GameConfig.PLAYER_SPEED, INPUT_DT);
     }
-    return from.add(Vec2.of(dx * clear, dy * clear));
   }
 
   EntityState toEntityState() {
