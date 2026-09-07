@@ -36,7 +36,7 @@ import kittens.common.sim.PlayerMotion;
  * Rendering + input, with client-side prediction for the local player: input is applied to a local
  * copy of the movement model immediately (no round-trip felt), then each snapshot re-anchors that
  * prediction to the authoritative state and replays the inputs the server hasn't acknowledged yet.
- * Remote players and computer-controlled enemies are shown with smooth snapshot interpolation.
+ * Remote players, computer-controlled enemies, and projectiles are smoothly interpolated/extrapolated.
  */
 public final class Client extends JPanel {
   private static final Color FLOOR = new Color(30, 30, 36);
@@ -69,6 +69,9 @@ public final class Client extends JPanel {
 
   // Remote entities (players & enemies): interpolated on-screen position per id -> {x, y}.
   private final Map<Integer, float[]> remotePos = new HashMap<>();
+
+  // Client-simulated projectiles: id -> {x, y, angle, vx, vy} for smooth 60 FPS flight.
+  private final Map<Integer, float[]> clientBullets = new HashMap<>();
 
   // Input state (EDT only).
   private final Set<Integer> held = new HashSet<>();
@@ -222,6 +225,7 @@ public final class Client extends JPanel {
     }
 
     interpolateRemotes();
+    updateBullets(dt);
   }
 
   /** On each new snapshot, re-anchor the prediction to authority + replay un-acked inputs. */
@@ -262,7 +266,7 @@ public final class Client extends JPanel {
     remotePos.keySet().removeIf(id -> id == me || !live.containsKey(id));
     for (EntityState e : live.values()) {
       if (e.id() == me || "bullet".equals(e.kind())) {
-        continue; // bullets are drawn at their raw position, not interpolated
+        continue; // bullets are smoothly dead-reckoned in updateBullets()
       }
       float[] rp = remotePos.get(e.id());
       if (rp == null) {
@@ -270,6 +274,54 @@ public final class Client extends JPanel {
       } else {
         rp[0] += (e.x() - rp[0]) * REMOTE_SMOOTHING;
         rp[1] += (e.y() - rp[1]) * REMOTE_SMOOTHING;
+      }
+    }
+  }
+
+  /** Advances bullets smoothly each client frame (60 FPS) and reconciles with server snapshots. */
+  private void updateBullets(double dt) {
+    Map<Integer, EntityState> live = client.entities();
+
+    // 1. Remove dead bullets no longer present in server snapshots
+    clientBullets.keySet().removeIf(id -> {
+      EntityState e = live.get(id);
+      return e == null || !"bullet".equals(e.kind());
+    });
+
+    // 2. Synchronize new/existing bullets with server snapshot authority
+    for (EntityState e : live.values()) {
+      if (!"bullet".equals(e.kind())) {
+        continue;
+      }
+      float[] b = clientBullets.get(e.id());
+      float vx = (float) Math.cos(e.angle()) * GameConfig.PROJECTILE_SPEED;
+      float vy = (float) Math.sin(e.angle()) * GameConfig.PROJECTILE_SPEED;
+
+      if (b == null) {
+        clientBullets.put(e.id(), new float[] {e.x(), e.y(), e.angle(), vx, vy});
+      } else {
+        // Soft reconcile position toward authoritative server snapshot
+        float dx = e.x() - b[0];
+        float dy = e.y() - b[1];
+        float distSq = dx * dx + dy * dy;
+        if (distSq > 48f * 48f) {
+          b[0] = e.x();
+          b[1] = e.y();
+        } else {
+          b[0] += dx * 0.25f;
+          b[1] += dy * 0.25f;
+        }
+        b[2] = e.angle();
+        b[3] = vx;
+        b[4] = vy;
+      }
+    }
+
+    // 3. Extrapolate position forward for this client frame
+    if (dt > 0) {
+      for (float[] b : clientBullets.values()) {
+        b[0] += b[3] * (float) dt;
+        b[1] += b[4] * (float) dt;
       }
     }
   }
@@ -319,11 +371,9 @@ public final class Client extends JPanel {
   private void drawEntities(Graphics2D g) {
     int me = client.myPlayerId();
 
-    // 1. Bullets
-    for (EntityState e : client.entities().values()) {
-      if ("bullet".equals(e.kind())) {
-        drawBullet(g, e);
-      }
+    // 1. Bullets (smooth 60 FPS client prediction / extrapolation)
+    for (float[] b : clientBullets.values()) {
+      drawBullet(g, b[0], b[1], b[2]);
     }
 
     // 2. Enemies
@@ -366,14 +416,14 @@ public final class Client extends JPanel {
     return e == null ? (float) GameConfig.PLAYER_MAX_HEALTH : e.hp();
   }
 
-  private void drawBullet(Graphics2D g, EntityState b) {
-    int tailX = Math.round(b.x() - (float) Math.cos(b.angle()) * 9f);
-    int tailY = Math.round(b.y() - (float) Math.sin(b.angle()) * 9f);
+  private void drawBullet(Graphics2D g, float bx, float by, float angle) {
+    int tailX = Math.round(bx - (float) Math.cos(angle) * 9f);
+    int tailY = Math.round(by - (float) Math.sin(angle) * 9f);
     Stroke saved = g.getStroke();
     g.setColor(new Color(255, 224, 130));
     g.setStroke(new BasicStroke(2f));
-    g.drawLine(tailX, tailY, Math.round(b.x()), Math.round(b.y()));
-    g.fillOval(Math.round(b.x()) - 2, Math.round(b.y()) - 2, 4, 4);
+    g.drawLine(tailX, tailY, Math.round(bx), Math.round(by));
+    g.fillOval(Math.round(bx) - 2, Math.round(by) - 2, 4, 4);
     g.setStroke(saved);
   }
 
