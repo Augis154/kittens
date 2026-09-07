@@ -35,8 +35,11 @@ public final class GameConfig {
   /** Enemy entity ids start here so they never collide with player ids. */
   public static final int ENEMY_ID_BASE = 100_000;
 
+  /** Explosion (blast marker) entity ids start here. */
+  public static final int EXPLOSION_ID_BASE = 2_000_000;
+
   /** Whether projectiles can hit other players. Flips off once enemies exist to shoot instead. */
-  public static final boolean FRIENDLY_FIRE = false;
+  public static final boolean FRIENDLY_FIRE = true;
 
   /** Rat enemy configuration. */
   public static final double RAT_MAX_HEALTH = 40.0;

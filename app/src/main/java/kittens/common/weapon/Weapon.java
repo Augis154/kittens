@@ -5,11 +5,11 @@ package kittens.common.weapon;
  * HUD/rendering stay in agreement; {@link #id()} is what travels on the wire.
  */
 public enum Weapon {
-  //       sprite     interval  dmg  pellets  spread  speed  life   name
-  PISTOL  ("pistol",   0.28,    16,   1,      0.00f,  460f,  1.3,  "Pistol"),
-  SHOTGUN ("shotgun",  0.72,     9,   6,      0.32f,  380f,  0.45, "Shotgun"),
-  RIFLE   ("ak",       0.10,     8,   1,      0.05f,  520f,  1.1,  "Rifle"),
-  BAZOOKA ("bazooka",  1.25,    60,   1,      0.00f,  300f,  2.4,  "Bazooka");
+  //       sprite     interval dmg pellets spread  speed  life   name        boomR boomDmg
+  PISTOL  ("pistol",  0.28,    16,  1,     0.00f,  460f,  1.3,  "Pistol",    0f,    0),
+  SHOTGUN ("shotgun", 0.72,     9,  6,     0.32f,  380f,  0.45, "Shotgun",   0f,    0),
+  RIFLE   ("ak",      0.10,     8,  1,     0.05f,  520f,  1.1,  "Rifle",     0f,    0),
+  BAZOOKA ("bazooka", 1.25,    35,  1,     0.00f,  300f,  2.4,  "Bazooka",  78f,   45);
 
   private static final Weapon[] BY_ID = values();
 
@@ -17,7 +17,7 @@ public enum Weapon {
   public final String sprite;
   /** Seconds between shots while the trigger is held. */
   public final double fireInterval;
-  /** Damage per projectile. */
+  /** Direct-hit damage per projectile. */
   public final double damage;
   /** Projectiles per shot. */
   public final int pellets;
@@ -26,9 +26,14 @@ public enum Weapon {
   public final float projectileSpeed;
   public final double projectileLifetime;
   public final String displayName;
+  /** Blast radius in pixels when a projectile from this weapon dies; 0 = no explosion. */
+  public final float explosionRadius;
+  /** Peak splash damage at the blast centre, falling off to a quarter at the edge. */
+  public final double explosionDamage;
 
   Weapon(String sprite, double fireInterval, double damage, int pellets, float spread,
-      float projectileSpeed, double projectileLifetime, String displayName) {
+      float projectileSpeed, double projectileLifetime, String displayName,
+      float explosionRadius, double explosionDamage) {
     this.sprite = sprite;
     this.fireInterval = fireInterval;
     this.damage = damage;
@@ -37,6 +42,12 @@ public enum Weapon {
     this.projectileSpeed = projectileSpeed;
     this.projectileLifetime = projectileLifetime;
     this.displayName = displayName;
+    this.explosionRadius = explosionRadius;
+    this.explosionDamage = explosionDamage;
+  }
+
+  public boolean explosive() {
+    return explosionRadius > 0f;
   }
 
   public int id() {
