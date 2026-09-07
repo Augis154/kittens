@@ -8,12 +8,14 @@ import kittens.common.map.TileMap;
 import kittens.common.math.Aabb;
 import kittens.common.math.Vec2;
 import kittens.common.net.EntityState;
+import kittens.common.weapon.Weapon;
 
 /**
  * A server-simulated bullet: travels in a straight line, dies on a wall, on the first enemy or
  * player it hits (dealing damage and, to enemies, knockback), or when its lifetime runs out.
- * Purely authoritative — clients just draw whatever the snapshot contains. Speed, damage and
- * lifetime come from the firing {@link kittens.common.weapon.Weapon}.
+ * Explosive weapons (the bazooka) additionally request an area-of-effect blast from
+ * {@link GameWorld} when they die. Purely authoritative — clients draw whatever the snapshot
+ * contains.
  */
 final class Projectile extends GameObject {
   private static final Vec2 BULLET_SIZE = Vec2.of(4f, 4f);
@@ -24,28 +26,61 @@ final class Projectile extends GameObject {
   private final int weaponId;
   private final Vec2 velocity;
   private final double damage;
-  private double life;
+  private final float explosionRadius;
+  private final double explosionDamage;
 
-  Projectile(int id, int ownerId, int weaponId, Vec2 pos, float angle,
-      double damage, float speed, double lifetime) {
+  private double life;
+  private boolean explosionPending;
+
+  Projectile(int id, int ownerId, Vec2 pos, float angle, Weapon weapon) {
     super(id, pos, BULLET_SIZE);
     this.ownerId = ownerId;
-    this.weaponId = weaponId;
-    this.velocity =
-        Vec2.of((float) Math.cos(angle), (float) Math.sin(angle)).scale(speed);
-    this.damage = damage;
-    this.life = lifetime;
+    this.weaponId = weapon.id();
+    this.velocity = Vec2.of((float) Math.cos(angle), (float) Math.sin(angle))
+        .scale(weapon.projectileSpeed);
+    this.damage = weapon.damage;
+    this.explosionRadius = weapon.explosionRadius;
+    this.explosionDamage = weapon.explosionDamage;
+    this.life = weapon.projectileLifetime;
   }
 
   boolean alive() {
     return isAlive();
   }
 
+  int ownerId() {
+    return ownerId;
+  }
+
+  float explosionRadius() {
+    return explosionRadius;
+  }
+
+  double explosionDamage() {
+    return explosionDamage;
+  }
+
+  /** True (once) if this projectile just died and should spawn an AOE blast. */
+  boolean consumeExplosion() {
+    if (!explosionPending) {
+      return false;
+    }
+    explosionPending = false;
+    return true;
+  }
+
+  private void detonate() {
+    kill();
+    if (explosionRadius > 0f) {
+      explosionPending = true;
+    }
+  }
+
   @Override
   public void update(double dt) {
     life -= dt;
     if (life <= 0) {
-      kill();
+      detonate();
       return;
     }
     pos = pos.add(velocity.scale((float) dt));
@@ -62,7 +97,7 @@ final class Projectile extends GameObject {
     }
 
     if (map.isWallAt(pos)) {
-      kill();
+      detonate();
       return;
     }
 
@@ -75,7 +110,7 @@ final class Projectile extends GameObject {
         if (enemy.bounds().contains(pos)) {
           enemy.damage(damage);
           enemy.applyKnockback(velocity.normalized().scale(GameConfig.PROJECTILE_KNOCKBACK));
-          kill();
+          detonate();
           return;
         }
       }
@@ -92,7 +127,7 @@ final class Projectile extends GameObject {
         }
         if (Aabb.fromCenter(p.pos(), PLAYER_BOX).contains(pos)) {
           p.damage(damage);
-          kill();
+          detonate();
           return;
         }
       }

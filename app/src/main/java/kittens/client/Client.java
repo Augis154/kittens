@@ -208,6 +208,12 @@ public final class Client extends JPanel {
     if (client.myPlayerId() < 0) {
       return;
     }
+    // A downed player can still aim, but sends no movement and records nothing to replay.
+    if (localDead()) {
+      client.sendInput(0f, 0f, aimAngle(), false, selectedWeapon.id());
+      unacked.clear();
+      return;
+    }
     InputCommand cmd =
         client.sendInput(moveX, moveY, aimAngle(), firing, selectedWeapon.id());
     unacked.addLast(new Pending(cmd.seq(), cmd.moveX(), cmd.moveY()));
@@ -252,6 +258,13 @@ public final class Client extends JPanel {
       return;
     }
 
+    // Downed: pin exactly to the server's (frozen) position — no input replay, nothing to smooth.
+    if (mine.hp() <= 0f) {
+      unacked.clear();
+      predicted = Vec2.of(mine.x(), mine.y());
+      return;
+    }
+
     long ack = client.ackSeq();
     while (!unacked.isEmpty() && unacked.peekFirst().seq() <= ack) {
       unacked.pollFirst();
@@ -263,9 +276,8 @@ public final class Client extends JPanel {
           PlayerMotion.step(map, target, p.moveX(), p.moveY(), GameConfig.PLAYER_SPEED, INPUT_DT);
     }
 
-    if (predicted == null || mine.hp() <= 0f
-        || predicted.distance(target) > RECONCILE_SNAP) {
-      predicted = target; // first snapshot, dead (frozen), or a desync worth snapping
+    if (predicted == null || predicted.distance(target) > RECONCILE_SNAP) {
+      predicted = target; // first snapshot, or a desync worth snapping
     } else {
       predicted = predicted.add(target.sub(predicted).scale(RECONCILE_SMOOTHING));
     }
@@ -276,8 +288,8 @@ public final class Client extends JPanel {
     Map<Integer, EntityState> live = client.entities();
     remotePos.keySet().removeIf(id -> id == me || !live.containsKey(id));
     for (EntityState e : live.values()) {
-      if (e.id() == me || "bullet".equals(e.kind())) {
-        continue; // bullets are drawn at their raw position, not interpolated
+      if (e.id() == me || "bullet".equals(e.kind()) || "boom".equals(e.kind())) {
+        continue; // bullets and blasts are drawn at their raw position, not interpolated
       }
       float[] rp = remotePos.get(e.id());
       if (rp == null) {
@@ -372,6 +384,30 @@ public final class Client extends JPanel {
             Weapon.byId(mine.weaponId()), true);
       }
     }
+
+    // 5. Explosions (on top)
+    for (EntityState e : client.entities().values()) {
+      if ("boom".equals(e.kind())) {
+        drawBoom(g, e);
+      }
+    }
+  }
+
+  private void drawBoom(Graphics2D g, EntityState e) {
+    float r = e.angle();          // current expanding radius
+    float maxR = e.hp();          // final radius
+    float progress = maxR > 0f ? r / maxR : 1f;
+    int fade = Math.max(0, Math.round(150 * (1f - progress)));
+    int cx = Math.round(e.x());
+    int cy = Math.round(e.y());
+    int ir = Math.round(r);
+    g.setColor(new Color(255, 150, 60, Math.round(fade * 0.6f)));
+    g.fillOval(cx - ir, cy - ir, ir * 2, ir * 2);
+    Stroke saved = g.getStroke();
+    g.setStroke(new BasicStroke(3f));
+    g.setColor(new Color(255, 224, 150, fade));
+    g.drawOval(cx - ir, cy - ir, ir * 2, ir * 2);
+    g.setStroke(saved);
   }
 
   private float angleOf(int id) {

@@ -27,7 +27,9 @@ final class GameWorld {
   private final ConcurrentHashMap<Integer, ServerPlayer> players = new ConcurrentHashMap<>();
   private final ConcurrentHashMap<Integer, Enemy> enemies = new ConcurrentHashMap<>();
   private final ConcurrentLinkedQueue<Projectile> projectiles = new ConcurrentLinkedQueue<>();
+  private final ConcurrentLinkedQueue<Explosion> explosions = new ConcurrentLinkedQueue<>();
   private final AtomicInteger nextProjectileId = new AtomicInteger(GameConfig.PROJECTILE_ID_BASE);
+  private final AtomicInteger nextExplosionId = new AtomicInteger(GameConfig.EXPLOSION_ID_BASE);
   private final AtomicLong tick = new AtomicLong();
   private final SpawnDirector spawnDirector = new SpawnDirector();
 
@@ -84,9 +86,60 @@ final class GameWorld {
       pr.tick(dt, map, players.values(), enemies.values());
     }
 
-    // 6. Cull dead projectiles and dead enemies
+    // 6. Detonate explosive projectiles that just died (bazooka AOE)
+    for (Projectile pr : projectiles) {
+      if (pr.consumeExplosion()) {
+        explode(pr.pos(), pr.explosionRadius(), pr.explosionDamage(), pr.ownerId());
+      }
+    }
+
+    // 7. Age blast markers, cull dead projectiles / enemies / explosions
+    for (Explosion ex : explosions) {
+      ex.tick(dt);
+    }
     projectiles.removeIf(pr -> !pr.alive());
     enemies.values().removeIf(Enemy::isDead);
+    explosions.removeIf(ex -> !ex.alive());
+  }
+
+  /** Area-of-effect blast: full damage at the centre, easing to a quarter at the rim. */
+  private void explode(Vec2 center, float radius, double peakDamage, int ownerId) {
+    float radiusSq = radius * radius;
+
+    for (Enemy enemy : enemies.values()) {
+      if (!enemy.isAlive()) {
+        continue;
+      }
+      Vec2 diff = enemy.pos().sub(center);
+      float distSq = diff.lengthSq();
+      if (distSq <= radiusSq) {
+        enemy.damage(peakDamage * falloff(distSq, radius));
+        if (distSq > 1e-3f) {
+          enemy.applyKnockback(
+              diff.normalized().scale(GameConfig.PROJECTILE_KNOCKBACK * 1.6f));
+        }
+      }
+    }
+
+    if (GameConfig.FRIENDLY_FIRE) {
+      for (ServerPlayer p : players.values()) {
+        if (p.dead()) {
+          continue;
+        }
+        Vec2 diff = p.pos().sub(center);
+        float distSq = diff.lengthSq();
+        if (distSq <= radiusSq) {
+          p.damage(peakDamage * falloff(distSq, radius));
+        }
+      }
+    }
+
+    explosions.add(new Explosion(nextExplosionId.getAndIncrement(), center, radius));
+  }
+
+  private static double falloff(float distSq, float radius) {
+    float frac = 1f - (float) Math.sqrt(distSq) / radius; // 1 at centre -> 0 at edge
+    return Math.max(0.25f, frac);
   }
 
   private void fire(ServerPlayer shooter) {
@@ -103,15 +156,7 @@ final class GameWorld {
       float angle =
           w.spread > 0f ? base + (float) rnd.nextDouble(-w.spread, w.spread) : base;
       projectiles.add(
-          new Projectile(
-              nextProjectileId.getAndIncrement(),
-              shooter.id(),
-              w.id(),
-              muzzle,
-              angle,
-              w.damage,
-              w.projectileSpeed,
-              w.projectileLifetime));
+          new Projectile(nextProjectileId.getAndIncrement(), shooter.id(), muzzle, angle, w));
     }
   }
 
@@ -121,7 +166,8 @@ final class GameWorld {
    */
   Snapshot snapshotFor(int viewerId) {
     List<EntityState> entities =
-        new ArrayList<>(players.size() + enemies.size() + projectiles.size());
+        new ArrayList<>(
+            players.size() + enemies.size() + projectiles.size() + explosions.size());
     for (ServerPlayer p : players.values()) {
       entities.add(p.toEntityState());
     }
@@ -130,6 +176,9 @@ final class GameWorld {
     }
     for (Projectile pr : projectiles) {
       entities.add(pr.toEntityState());
+    }
+    for (Explosion ex : explosions) {
+      entities.add(ex.toEntityState());
     }
     ServerPlayer viewer = players.get(viewerId);
     long ackSeq = viewer == null ? -1 : viewer.lastProcessedSeq();
