@@ -96,8 +96,10 @@ public abstract class Enemy extends Actor {
 
     // Check melee contact attack with target actors (players).
     if (attackCooldown <= 0 && targets != null) {
+      // Expanded attack bounds (4px reach in all directions) so adjacent/touching enemies reliably hit
+      Aabb attackReach = Aabb.fromCenter(pos, size.add(Vec2.of(8f, 8f)));
       for (Actor target : targets) {
-        if (!target.isDead() && bounds().intersects(target.bounds())) {
+        if (!target.isDead() && attackReach.intersects(target.bounds())) {
           target.damage(attackDamage);
           attackCooldown = attackCooldownTime;
           break;

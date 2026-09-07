@@ -46,7 +46,7 @@ public final class Client extends JPanel {
   private static final Color WALL_TOP = new Color(96, 100, 122);
   private static final Color SPAWN_TILE = new Color(38, 52, 44);
 
-  private static final int FPS = 60;
+  private static final int FPS = 180;
   private static final int INPUT_HZ = GameConfig.TICK_HZ;
   private static final double INPUT_DT = 1.0 / GameConfig.TICK_HZ;
   /** Per-frame easing of remote entities toward their snapshot position. */
