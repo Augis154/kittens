@@ -6,6 +6,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.ThreadLocalRandom;
 import kittens.common.GameConfig;
 import kittens.common.entity.Enemy;
 import kittens.common.map.TileMap;
@@ -13,6 +14,7 @@ import kittens.common.math.Vec2;
 import kittens.common.net.EntityState;
 import kittens.common.net.InputCommand;
 import kittens.common.net.Snapshot;
+import kittens.common.weapon.Weapon;
 
 /**
  * The authoritative simulation: connected players, computer-controlled enemies, live projectiles
@@ -88,15 +90,29 @@ final class GameWorld {
   }
 
   private void fire(ServerPlayer shooter) {
-    float angle = shooter.aimAngle();
+    Weapon w = shooter.weapon();
+    float base = shooter.aimAngle();
     Vec2 muzzle =
         shooter
             .pos()
             .add(
-                Vec2.of((float) Math.cos(angle), (float) Math.sin(angle))
+                Vec2.of((float) Math.cos(base), (float) Math.sin(base))
                     .scale(GameConfig.PLAYER_SIZE * 0.5f + 4f));
-    projectiles.add(
-        new Projectile(nextProjectileId.getAndIncrement(), shooter.id(), muzzle, angle));
+    ThreadLocalRandom rnd = ThreadLocalRandom.current();
+    for (int pellet = 0; pellet < w.pellets; pellet++) {
+      float angle =
+          w.spread > 0f ? base + (float) rnd.nextDouble(-w.spread, w.spread) : base;
+      projectiles.add(
+          new Projectile(
+              nextProjectileId.getAndIncrement(),
+              shooter.id(),
+              w.id(),
+              muzzle,
+              angle,
+              w.damage,
+              w.projectileSpeed,
+              w.projectileLifetime));
+    }
   }
 
   /**

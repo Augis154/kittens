@@ -23,13 +23,6 @@ public final class GameConfig {
   /** Player movement speed in pixels per second. */
   public static final float PLAYER_SPEED = 170f;
 
-  public static final float PROJECTILE_SPEED = 430f;
-  public static final double PROJECTILE_DAMAGE = 18;
-  public static final double PROJECTILE_LIFETIME = 1.4;
-
-  /** Minimum seconds between shots while the fire button is held. */
-  public static final double FIRE_INTERVAL = 0.22;
-
   /** Full player health. */
   public static final double PLAYER_MAX_HEALTH = 100;
 

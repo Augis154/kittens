@@ -8,12 +8,13 @@ import kittens.common.math.Vec2;
 import kittens.common.net.EntityState;
 import kittens.common.net.InputCommand;
 import kittens.common.sim.PlayerMotion;
+import kittens.common.weapon.Weapon;
 
 /**
  * The server's authoritative view of one player. Inputs land in a queue from the connection's
  * reader thread; the world-loop thread drains them each tick, applying every command through the
  * shared {@link PlayerMotion} model and remembering the last {@code seq} it processed so the client
- * can reconcile its prediction. Also owns the fire cooldown, health and respawn timer.
+ * can reconcile its prediction. Also owns the selected weapon, fire cooldown, health and respawn.
  */
 final class ServerPlayer extends Actor {
   /** Fixed per-input time step — the client predicts with the exact same value. */
@@ -26,6 +27,7 @@ final class ServerPlayer extends Actor {
   private final ConcurrentLinkedQueue<InputCommand> inbox = new ConcurrentLinkedQueue<>();
 
   private boolean firing;
+  private Weapon weapon = Weapon.PISTOL;
   private double fireCooldown;
   private double respawnTimer;
   private long lastProcessedSeq = -1;
@@ -43,6 +45,10 @@ final class ServerPlayer extends Actor {
 
   float aimAngle() {
     return (float) facing;
+  }
+
+  Weapon weapon() {
+    return weapon;
   }
 
   boolean dead() {
@@ -80,16 +86,27 @@ final class ServerPlayer extends Actor {
       lastProcessedSeq = cmd.seq();
       facing = cmd.aimAngle();
       firing = cmd.firing();
+      selectWeapon(Weapon.byId(cmd.weaponId()));
       pos = PlayerMotion.step(map, pos, cmd.moveX(), cmd.moveY(), GameConfig.PLAYER_SPEED, INPUT_DT);
     }
 
     if (firing && fireCooldown <= 0) {
       fireRequested = true;
-      fireCooldown = GameConfig.FIRE_INTERVAL;
+      fireCooldown = weapon.fireInterval;
     }
   }
 
-  /** Returns whether the player wants to fire a projectile this tick, clearing the request. */
+  private void selectWeapon(Weapon next) {
+    if (next == weapon) {
+      return;
+    }
+    weapon = next;
+    // Switching can't fire sooner than the new weapon allows, but also can't be gamed to skip an
+    // already-shorter cooldown.
+    fireCooldown = Math.min(fireCooldown, next.fireInterval);
+  }
+
+  /** Returns whether the player wants to fire this tick, clearing the request. */
   boolean consumeFireRequest() {
     boolean r = fireRequested;
     fireRequested = false;
@@ -115,6 +132,6 @@ final class ServerPlayer extends Actor {
   }
 
   EntityState toEntityState() {
-    return new EntityState(id, "cat", pos.x, pos.y, (float) facing, (float) health, -1);
+    return new EntityState(id, "cat", pos.x, pos.y, (float) facing, (float) health, weapon.id());
   }
 }

@@ -31,6 +31,7 @@ import kittens.common.math.Vec2;
 import kittens.common.net.EntityState;
 import kittens.common.net.InputCommand;
 import kittens.common.sim.PlayerMotion;
+import kittens.common.weapon.Weapon;
 
 /**
  * Rendering + input, with client-side prediction for the local player: input is applied to a local
@@ -78,6 +79,7 @@ public final class Client extends JPanel {
   private int mouseX;
   private int mouseY;
   private boolean firing;
+  private Weapon selectedWeapon = Weapon.PISTOL;
   private long lastFrameNanos;
 
   public Client(GameClient client) {
@@ -106,11 +108,16 @@ public final class Client extends JPanel {
         new KeyAdapter() {
           @Override
           public void keyPressed(KeyEvent e) {
-            Timer grace = pendingRelease.remove(e.getKeyCode());
+            int code = e.getKeyCode();
+            if (code >= KeyEvent.VK_1 && code < KeyEvent.VK_1 + Weapon.count()) {
+              selectedWeapon = Weapon.byId(code - KeyEvent.VK_1);
+              return;
+            }
+            Timer grace = pendingRelease.remove(code);
             if (grace != null) {
               grace.stop();
             }
-            if (held.add(e.getKeyCode())) {
+            if (held.add(code)) {
               recomputeDirection();
             }
           }
@@ -201,7 +208,8 @@ public final class Client extends JPanel {
     if (client.myPlayerId() < 0) {
       return;
     }
-    InputCommand cmd = client.sendInput(moveX, moveY, aimAngle(), firing);
+    InputCommand cmd =
+        client.sendInput(moveX, moveY, aimAngle(), firing, selectedWeapon.id());
     unacked.addLast(new Pending(cmd.seq(), cmd.moveX(), cmd.moveY()));
     while (unacked.size() > 4 * INPUT_HZ) { // ~4s safety cap
       unacked.pollFirst();
@@ -217,11 +225,17 @@ public final class Client extends JPanel {
 
     reconcile();
 
-    if (predicted != null && dt > 0) {
+    // A downed player can't move — don't predict past the authoritative (frozen) position.
+    if (predicted != null && dt > 0 && !localDead()) {
       predicted = PlayerMotion.step(map, predicted, moveX, moveY, GameConfig.PLAYER_SPEED, dt);
     }
 
     interpolateRemotes();
+  }
+
+  private boolean localDead() {
+    int me = client.myPlayerId();
+    return me >= 0 && hpOf(me) <= 0f;
   }
 
   /** On each new snapshot, re-anchor the prediction to authority + replay un-acked inputs. */
@@ -249,8 +263,9 @@ public final class Client extends JPanel {
           PlayerMotion.step(map, target, p.moveX(), p.moveY(), GameConfig.PLAYER_SPEED, INPUT_DT);
     }
 
-    if (predicted == null || predicted.distance(target) > RECONCILE_SNAP) {
-      predicted = target; // first snapshot, or a desync worth snapping
+    if (predicted == null || mine.hp() <= 0f
+        || predicted.distance(target) > RECONCILE_SNAP) {
+      predicted = target; // first snapshot, dead (frozen), or a desync worth snapping
     } else {
       predicted = predicted.add(target.sub(predicted).scale(RECONCILE_SMOOTHING));
     }
@@ -341,17 +356,20 @@ public final class Client extends JPanel {
       int id = entry.getKey();
       EntityState e = client.entities().get(id);
       if (e != null && "cat".equals(e.kind())) {
-        drawKitten(g, id, entry.getValue()[0], entry.getValue()[1], angleOf(id), hpOf(id), false);
+        drawKitten(
+            g, id, entry.getValue()[0], entry.getValue()[1],
+            angleOf(id), hpOf(id), weaponOf(id), false);
       }
     }
 
     // 4. Local Player
     if (predicted != null) {
-      drawKitten(g, me, predicted.x, predicted.y, aimAngle(), hpOf(me), true);
+      drawKitten(g, me, predicted.x, predicted.y, aimAngle(), hpOf(me), selectedWeapon, true);
     } else {
       EntityState mine = me < 0 ? null : client.entities().get(me);
       if (mine != null) {
-        drawKitten(g, me, mine.x(), mine.y(), mine.angle(), mine.hp(), true);
+        drawKitten(g, me, mine.x(), mine.y(), mine.angle(), mine.hp(),
+            Weapon.byId(mine.weaponId()), true);
       }
     }
   }
@@ -366,14 +384,22 @@ public final class Client extends JPanel {
     return e == null ? (float) GameConfig.PLAYER_MAX_HEALTH : e.hp();
   }
 
+  private Weapon weaponOf(int id) {
+    EntityState e = client.entities().get(id);
+    return Weapon.byId(e == null ? 0 : e.weaponId());
+  }
+
   private void drawBullet(Graphics2D g, EntityState b) {
-    int tailX = Math.round(b.x() - (float) Math.cos(b.angle()) * 9f);
-    int tailY = Math.round(b.y() - (float) Math.sin(b.angle()) * 9f);
+    boolean rocket = b.weaponId() == Weapon.BAZOOKA.id();
+    float tail = rocket ? 14f : 9f;
+    int tailX = Math.round(b.x() - (float) Math.cos(b.angle()) * tail);
+    int tailY = Math.round(b.y() - (float) Math.sin(b.angle()) * tail);
     Stroke saved = g.getStroke();
-    g.setColor(new Color(255, 224, 130));
-    g.setStroke(new BasicStroke(2f));
+    g.setColor(rocket ? new Color(255, 150, 70) : new Color(255, 224, 130));
+    g.setStroke(new BasicStroke(rocket ? 4f : 2f));
     g.drawLine(tailX, tailY, Math.round(b.x()), Math.round(b.y()));
-    g.fillOval(Math.round(b.x()) - 2, Math.round(b.y()) - 2, 4, 4);
+    int r = rocket ? 4 : 2;
+    g.fillOval(Math.round(b.x()) - r, Math.round(b.y()) - r, r * 2, r * 2);
     g.setStroke(saved);
   }
 
@@ -408,7 +434,7 @@ public final class Client extends JPanel {
   }
 
   private void drawKitten(
-      Graphics2D g, int id, float cx, float cy, float angle, float hp, boolean self) {
+      Graphics2D g, int id, float cx, float cy, float angle, float hp, Weapon weapon, boolean self) {
     int t = GameConfig.TILE;
     int x = Math.round(cx - t / 2f);
     int y = Math.round(cy - t / 2f);
@@ -448,7 +474,7 @@ public final class Client extends JPanel {
     if (facingLeft) {
       g.scale(1, -1); // keep the gun upright when aiming left
     }
-    g.drawImage(assets.weapon("pistol"), 4, -w / 2, w, w, null);
+    g.drawImage(assets.weapon(weapon.sprite), 4, -w / 2, w, w, null);
     g.setTransform(saved);
 
     // Health bar.
@@ -467,20 +493,35 @@ public final class Client extends JPanel {
   }
 
   private void drawHud(Graphics2D g) {
-    g.setColor(new Color(255, 255, 255, 180));
     int me = client.myPlayerId();
-    String who = me < 0 ? "connecting…" : "you are P" + me;
+    int baseY = (int) map.pixelHeight() - 10;
+
     long enemyCount =
         client.entities().values().stream()
             .filter(e -> "rat".equals(e.kind()) || "mouse".equals(e.kind()))
             .count();
+    g.setColor(new Color(255, 255, 255, 150));
+    String who = me < 0 ? "connecting…" : "P" + me;
     g.drawString(
-        who
-            + "   ·   Enemies: "
-            + enemyCount
-            + "   —   WASD / arrows move · mouse aim · click to fire",
+        who + "  ·  enemies: " + enemyCount
+            + "  ·  WASD move · mouse aim · click fire · 1-4 weapon",
         8,
-        (int) map.pixelHeight() - 8);
+        baseY - 18);
+
+    // Weapon selector.
+    int x = 8;
+    for (Weapon wpn : Weapon.values()) {
+      boolean active = wpn == selectedWeapon;
+      String label = (wpn.id() + 1) + " " + wpn.displayName;
+      int wpx = g.getFontMetrics().stringWidth(label) + 12;
+      if (active) {
+        g.setColor(new Color(120, 210, 255, 60));
+        g.fillRect(x, baseY - 12, wpx, 16);
+      }
+      g.setColor(active ? Color.WHITE : new Color(255, 255, 255, 110));
+      g.drawString(label, x + 6, baseY);
+      x += wpx + 4;
+    }
   }
 
   public static void main(String[] args) throws IOException {
