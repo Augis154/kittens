@@ -3,9 +3,9 @@ package kittens.common.entity;
 import java.util.Collection;
 import kittens.common.GameConfig;
 import kittens.common.map.TileMap;
+import kittens.common.math.Aabb;
 import kittens.common.math.Vec2;
 import kittens.common.net.EntityState;
-import kittens.common.sim.PlayerMotion;
 
 /**
  * Abstract computer-controlled enemy base class extending {@link Actor}.
@@ -13,6 +13,9 @@ import kittens.common.sim.PlayerMotion;
  * <p>The movement decision is encapsulated in the virtual method {@link
  * #computeMoveDirection(TileMap, Collection, double)}, which serves as the seam where specialized
  * AI behaviors and strategy patterns can be attached.
+ *
+ * <p>Enemies collide with walls and players (stopping/sliding against them without pushing players),
+ * but pass through other enemies.
  */
 public abstract class Enemy extends Actor {
   protected final String kind;
@@ -59,9 +62,8 @@ public abstract class Enemy extends Actor {
    * Advances simulation for this enemy by {@code dt}:
    * 1. Decays timers and knockback.
    * 2. Computes movement direction via {@link #computeMoveDirection}.
-   * 3. Applies soft separation from other enemies.
-   * 4. Steps movement with wall sliding via {@link PlayerMotion}.
-   * 5. Performs melee attacks against overlapping alive target actors.
+   * 3. Steps movement with sliding against walls and players (without pushing players).
+   * 4. Performs melee attacks against overlapping alive target actors.
    */
   public void tick(
       double dt,
@@ -78,27 +80,6 @@ public abstract class Enemy extends Actor {
     // Compute desired move direction toward target(s).
     Vec2 desiredDir = computeMoveDirection(map, targets, dt);
 
-    // Apply soft enemy-to-enemy separation so enemies don't stack on each other.
-    if (enemies != null) {
-      Vec2 separation = Vec2.ZERO;
-      float myRadius = size.x * 0.5f;
-      for (Enemy other : enemies) {
-        if (other == this || !other.isAlive()) {
-          continue;
-        }
-        float minDist = myRadius + other.size.x * 0.5f;
-        Vec2 diff = pos.sub(other.pos());
-        float dist = diff.length();
-        if (dist > 1e-4f && dist < minDist) {
-          float strength = (minDist - dist) / minDist;
-          separation = separation.add(diff.normalized().scale(strength));
-        }
-      }
-      if (separation.lengthSq() > 1e-4f) {
-        desiredDir = desiredDir.add(separation.scale(1.2f));
-      }
-    }
-
     float dirLen = desiredDir.length();
     if (dirLen > 1e-4f) {
       desiredDir = desiredDir.scale(1.0f / dirLen);
@@ -110,7 +91,7 @@ public abstract class Enemy extends Actor {
     float totalSpeed = moveDelta.length();
     if (totalSpeed > 1e-4f) {
       Vec2 normMove = moveDelta.scale(1.0f / totalSpeed);
-      pos = PlayerMotion.step(map, pos, size, normMove.x, normMove.y, totalSpeed, dt);
+      pos = stepEnemyMovement(map, pos, size, normMove.x, normMove.y, totalSpeed, dt, targets);
     }
 
     // Check melee contact attack with target actors (players).
@@ -123,6 +104,78 @@ public abstract class Enemy extends Actor {
         }
       }
     }
+  }
+
+  /**
+   * Moves enemy with axis-separated sliding against map walls and players.
+   * Collides only with walls and players; never pushes players.
+   */
+  private Vec2 stepEnemyMovement(
+      TileMap map,
+      Vec2 from,
+      Vec2 boxSize,
+      float moveX,
+      float moveY,
+      float moveSpeed,
+      double dt,
+      Collection<? extends Actor> players) {
+    Vec2 dir = Vec2.of(moveX, moveY);
+    float len = dir.length();
+    if (len < 1e-4f || dt <= 0) {
+      return from;
+    }
+    if (len > 1f) {
+      dir = dir.scale(1f / len);
+    }
+    Vec2 delta = dir.scale((float) (moveSpeed * dt));
+    Vec2 next = moveAxisEnemy(map, from, boxSize, delta.x, 0f, players);
+    return moveAxisEnemy(map, next, boxSize, 0f, delta.y, players);
+  }
+
+  private Vec2 moveAxisEnemy(
+      TileMap map,
+      Vec2 from,
+      Vec2 boxSize,
+      float dx,
+      float dy,
+      Collection<? extends Actor> players) {
+    Vec2 target = from.add(Vec2.of(dx, dy));
+    if (!isBlocked(map, target, boxSize, players)) {
+      return target;
+    }
+    float clear = 0f;
+    float blocked = 1f;
+    for (int i = 0; i < 6; i++) {
+      float mid = (clear + blocked) * 0.5f;
+      Vec2 candidate = from.add(Vec2.of(dx * mid, dy * mid));
+      if (isBlocked(map, candidate, boxSize, players)) {
+        blocked = mid;
+      } else {
+        clear = mid;
+      }
+    }
+    return from.add(Vec2.of(dx * clear, dy * clear));
+  }
+
+  private boolean isBlocked(
+      TileMap map,
+      Vec2 candidatePos,
+      Vec2 boxSize,
+      Collection<? extends Actor> players) {
+    // 1. Map walls
+    if (map.overlapsWall(Aabb.fromCenter(candidatePos, boxSize))) {
+      return true;
+    }
+    // 2. Players (only alive players block enemy movement; enemies cannot push players)
+    if (players != null) {
+      Aabb candidateBox = Aabb.fromCenter(candidatePos, boxSize);
+      for (Actor p : players) {
+        if (!p.isDead() && candidateBox.intersects(p.bounds())) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /** The AI seam: compute the desired normalized movement direction vector for this enemy. */
