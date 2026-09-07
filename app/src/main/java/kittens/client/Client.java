@@ -71,7 +71,7 @@ public final class Client extends JPanel {
   // Remote entities (players & enemies): interpolated on-screen position per id -> {x, y}.
   private final Map<Integer, float[]> remotePos = new HashMap<>();
 
-  // Client-simulated projectiles: id -> {x, y, angle, vx, vy} for smooth 60 FPS flight.
+  // Client-simulated projectiles: id -> {x, y, angle, vx, vy, weaponId} for smooth 60 FPS flight.
   private final Map<Integer, float[]> clientBullets = new HashMap<>();
 
   // Input state (EDT only).
@@ -267,8 +267,7 @@ public final class Client extends JPanel {
           PlayerMotion.step(map, target, p.moveX(), p.moveY(), GameConfig.PLAYER_SPEED, INPUT_DT);
     }
 
-    if (predicted == null || mine.hp() <= 0f
-        || predicted.distance(target) > RECONCILE_SNAP) {
+    if (predicted == null || mine.hp() <= 0f || predicted.distance(target) > RECONCILE_SNAP) {
       predicted = target; // first snapshot, dead (frozen), or a desync worth snapping
     } else {
       predicted = predicted.add(target.sub(predicted).scale(RECONCILE_SMOOTHING));
@@ -308,12 +307,16 @@ public final class Client extends JPanel {
       if (!"bullet".equals(e.kind())) {
         continue;
       }
-      float[] b = clientBullets.get(e.id());
-      float vx = (float) Math.cos(e.angle()) * GameConfig.PROJECTILE_SPEED;
-      float vy = (float) Math.sin(e.angle()) * GameConfig.PROJECTILE_SPEED;
+      Weapon weapon = Weapon.byId(e.weaponId());
+      float speed = weapon.projectileSpeed;
+      float vx = (float) Math.cos(e.angle()) * speed;
+      float vy = (float) Math.sin(e.angle()) * speed;
 
+      float[] b = clientBullets.get(e.id());
       if (b == null) {
-        clientBullets.put(e.id(), new float[] {e.x(), e.y(), e.angle(), vx, vy});
+        // [x, y, angle, vx, vy, weaponId]
+        clientBullets.put(
+            e.id(), new float[] {e.x(), e.y(), e.angle(), vx, vy, e.weaponId()});
       } else {
         // Soft reconcile position toward authoritative server snapshot
         float dx = e.x() - b[0];
@@ -329,6 +332,7 @@ public final class Client extends JPanel {
         b[2] = e.angle();
         b[3] = vx;
         b[4] = vy;
+        b[5] = e.weaponId();
       }
     }
 
@@ -388,7 +392,7 @@ public final class Client extends JPanel {
 
     // 1. Bullets (smooth 60 FPS client prediction / extrapolation)
     for (float[] b : clientBullets.values()) {
-      drawBullet(g, b[0], b[1], b[2]);
+      drawBullet(g, b[0], b[1], b[2], (int) b[5]);
     }
 
     // 2. Enemies
@@ -407,8 +411,14 @@ public final class Client extends JPanel {
       EntityState e = client.entities().get(id);
       if (e != null && "cat".equals(e.kind())) {
         drawKitten(
-            g, id, entry.getValue()[0], entry.getValue()[1],
-            angleOf(id), hpOf(id), weaponOf(id), false);
+            g,
+            id,
+            entry.getValue()[0],
+            entry.getValue()[1],
+            angleOf(id),
+            hpOf(id),
+            weaponOf(id),
+            false);
       }
     }
 
@@ -418,8 +428,15 @@ public final class Client extends JPanel {
     } else {
       EntityState mine = me < 0 ? null : client.entities().get(me);
       if (mine != null) {
-        drawKitten(g, me, mine.x(), mine.y(), mine.angle(), mine.hp(),
-            Weapon.byId(mine.weaponId()), true);
+        drawKitten(
+            g,
+            me,
+            mine.x(),
+            mine.y(),
+            mine.angle(),
+            mine.hp(),
+            Weapon.byId(mine.weaponId()),
+            true);
       }
     }
   }
@@ -439,17 +456,17 @@ public final class Client extends JPanel {
     return Weapon.byId(e == null ? 0 : e.weaponId());
   }
 
-  private void drawBullet(Graphics2D g, EntityState b) {
-    boolean rocket = b.weaponId() == Weapon.BAZOOKA.id();
+  private void drawBullet(Graphics2D g, float bx, float by, float angle, int weaponId) {
+    boolean rocket = weaponId == Weapon.BAZOOKA.id();
     float tail = rocket ? 14f : 9f;
-    int tailX = Math.round(b.x() - (float) Math.cos(b.angle()) * tail);
-    int tailY = Math.round(b.y() - (float) Math.sin(b.angle()) * tail);
+    int tailX = Math.round(bx - (float) Math.cos(angle) * tail);
+    int tailY = Math.round(by - (float) Math.sin(angle) * tail);
     Stroke saved = g.getStroke();
     g.setColor(rocket ? new Color(255, 150, 70) : new Color(255, 224, 130));
     g.setStroke(new BasicStroke(rocket ? 4f : 2f));
-    g.drawLine(tailX, tailY, Math.round(b.x()), Math.round(b.y()));
+    g.drawLine(tailX, tailY, Math.round(bx), Math.round(by));
     int r = rocket ? 4 : 2;
-    g.fillOval(Math.round(b.x()) - r, Math.round(b.y()) - r, r * 2, r * 2);
+    g.fillOval(Math.round(bx) - r, Math.round(by) - r, r * 2, r * 2);
     g.setStroke(saved);
   }
 
@@ -484,7 +501,14 @@ public final class Client extends JPanel {
   }
 
   private void drawKitten(
-      Graphics2D g, int id, float cx, float cy, float angle, float hp, Weapon weapon, boolean self) {
+      Graphics2D g,
+      int id,
+      float cx,
+      float cy,
+      float angle,
+      float hp,
+      Weapon weapon,
+      boolean self) {
     int t = GameConfig.TILE;
     int x = Math.round(cx - t / 2f);
     int y = Math.round(cy - t / 2f);
@@ -553,7 +577,9 @@ public final class Client extends JPanel {
     g.setColor(new Color(255, 255, 255, 150));
     String who = me < 0 ? "connecting…" : "P" + me;
     g.drawString(
-        who + "  ·  enemies: " + enemyCount
+        who
+            + "  ·  enemies: "
+            + enemyCount
             + "  ·  WASD move · mouse aim · click fire · 1-4 weapon",
         8,
         baseY - 18);
