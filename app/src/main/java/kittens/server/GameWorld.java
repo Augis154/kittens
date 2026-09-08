@@ -158,6 +158,12 @@ final class GameWorld {
       projectiles.add(
           new Projectile(nextProjectileId.getAndIncrement(), shooter.id(), muzzle, angle, w));
     }
+
+    // Recoil: shove the shooter backwards, opposite the aim.
+    if (w.recoil > 0f) {
+      shooter.applyKnockback(
+          Vec2.of(-(float) Math.cos(base), -(float) Math.sin(base)).scale(w.recoil));
+    }
   }
 
   /**
@@ -182,7 +188,9 @@ final class GameWorld {
     }
     ServerPlayer viewer = players.get(viewerId);
     long ackSeq = viewer == null ? -1 : viewer.lastProcessedSeq();
-    return new Snapshot(tick.get(), ackSeq, entities);
+    int ammo = viewer == null ? 0 : viewer.magAmmo();
+    float reload = viewer == null ? 0f : viewer.reloadProgress();
+    return new Snapshot(tick.get(), ackSeq, entities, ammo, reload);
   }
 
   String mapId() {

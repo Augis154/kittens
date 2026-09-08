@@ -31,6 +31,12 @@ final class ServerPlayer extends Actor {
   private double fireCooldown;
   private double respawnTimer;
   private long lastProcessedSeq = -1;
+  private Vec2 knockback = Vec2.ZERO;
+
+  /** Rounds left in each weapon's magazine, indexed by {@link Weapon#id()}. */
+  private final int[] magAmmo = new int[Weapon.count()];
+  /** Seconds left on the current reload; 0 = not reloading. */
+  private double reloadTimer;
 
   private boolean fireRequested;
 
@@ -41,6 +47,13 @@ final class ServerPlayer extends Actor {
         Vec2.of(GameConfig.PLAYER_SIZE, GameConfig.PLAYER_SIZE),
         GameConfig.PLAYER_MAX_HEALTH);
     this.spawn = spawn;
+    refillAllMagazines();
+  }
+
+  private void refillAllMagazines() {
+    for (int i = 0; i < magAmmo.length; i++) {
+      magAmmo[i] = Weapon.byId(i).magazineSize;
+    }
   }
 
   float aimAngle() {
@@ -65,6 +78,13 @@ final class ServerPlayer extends Actor {
 
   void tick(double dt, TileMap map) {
     fireCooldown = Math.max(0, fireCooldown - dt);
+    if (reloadTimer > 0) {
+      reloadTimer -= dt;
+      if (reloadTimer <= 0) {
+        reloadTimer = 0;
+        magAmmo[weapon.id()] = weapon.magazineSize;
+      }
+    }
 
     if (dead()) {
       respawnTimer -= dt;
@@ -90,10 +110,40 @@ final class ServerPlayer extends Actor {
       pos = PlayerMotion.step(map, pos, cmd.moveX(), cmd.moveY(), GameConfig.PLAYER_SPEED, INPUT_DT);
     }
 
-    if (firing && fireCooldown <= 0) {
-      fireRequested = true;
-      fireCooldown = weapon.fireInterval;
+    // External knockback (e.g. bazooka recoil): applied on top of input, then decayed.
+    if (knockback.lengthSq() > 1e-4f) {
+      float kbSpeed = knockback.length();
+      pos = PlayerMotion.step(
+          map, pos, knockback.x / kbSpeed, knockback.y / kbSpeed, kbSpeed, dt);
     }
+    knockback = knockback.scale((float) Math.max(0, 1.0 - dt * GameConfig.KNOCKBACK_DECAY));
+
+    if (firing && fireCooldown <= 0 && reloadTimer <= 0) {
+      if (magAmmo[weapon.id()] > 0) {
+        fireRequested = true;
+        fireCooldown = weapon.fireInterval;
+        magAmmo[weapon.id()]--;
+        if (magAmmo[weapon.id()] == 0) {
+          reloadTimer = weapon.reloadTime; // auto-reload once the magazine runs dry
+        }
+      } else {
+        reloadTimer = weapon.reloadTime;
+      }
+    }
+  }
+
+  int magAmmo() {
+    return magAmmo[weapon.id()];
+  }
+
+  /** 0 when ready to fire; otherwise reload progress in (0, 1]. */
+  float reloadProgress() {
+    return reloadTimer <= 0 ? 0f : (float) (1.0 - reloadTimer / weapon.reloadTime);
+  }
+
+  /** Shove this player by {@code force} (px/s); decays over the next few ticks. */
+  void applyKnockback(Vec2 force) {
+    knockback = knockback.add(force);
   }
 
   private void selectWeapon(Weapon next) {
@@ -101,6 +151,7 @@ final class ServerPlayer extends Actor {
       return;
     }
     weapon = next;
+    reloadTimer = 0; // switching cancels an in-progress reload
     // Switching can't fire sooner than the new weapon allows, but also can't be gamed to skip an
     // already-shorter cooldown.
     fireCooldown = Math.min(fireCooldown, next.fireInterval);
@@ -129,6 +180,8 @@ final class ServerPlayer extends Actor {
     pos = spawn;
     health = maxHealth;
     alive = true;
+    reloadTimer = 0;
+    refillAllMagazines();
   }
 
   EntityState toEntityState() {

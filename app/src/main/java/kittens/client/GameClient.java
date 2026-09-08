@@ -30,6 +30,8 @@ final class GameClient {
   private volatile int myPlayerId = -1;
   private final Map<Integer, EntityState> entities = new ConcurrentHashMap<>();
   private volatile long ackSeq = -1;
+  private volatile int viewerAmmo = 0;
+  private volatile float viewerReload = 0f;
   private final AtomicLong snapshotVersion = new AtomicLong();
 
   GameClient(String host, int port) throws IOException {
@@ -62,6 +64,16 @@ final class GameClient {
   /** Bumps on every snapshot; the predictor reconciles when it changes. */
   long snapshotVersion() {
     return snapshotVersion.get();
+  }
+
+  /** Rounds left in the local player's current weapon magazine. */
+  int viewerAmmo() {
+    return viewerAmmo;
+  }
+
+  /** 0 when the local player is ready to fire; otherwise reload progress in (0, 1]. */
+  float viewerReload() {
+    return viewerReload;
   }
 
   /** Send the current intent and return the command (its {@code seq} is needed for replay). */
@@ -105,6 +117,8 @@ final class GameClient {
           entities.put(e.id(), e);
         }
         ackSeq = snapshot.ackSeq();
+        viewerAmmo = snapshot.viewerAmmo();
+        viewerReload = snapshot.viewerReload();
         snapshotVersion.incrementAndGet();
       }
       default -> {

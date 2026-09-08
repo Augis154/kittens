@@ -5,11 +5,11 @@ package kittens.common.weapon;
  * HUD/rendering stay in agreement; {@link #id()} is what travels on the wire.
  */
 public enum Weapon {
-  //       sprite     interval dmg pellets spread  speed  life   name        boomR boomDmg
-  PISTOL  ("pistol",  0.28,    16,  1,     0.00f,  460f,  1.3,  "Pistol",    0f,    0),
-  SHOTGUN ("shotgun", 0.72,     9,  6,     0.32f,  380f,  0.45, "Shotgun",   0f,    0),
-  RIFLE   ("ak",      0.10,     8,  1,     0.05f,  520f,  1.1,  "Rifle",     0f,    0),
-  BAZOOKA ("bazooka", 1.25,    35,  1,     0.00f,  300f,  2.4,  "Bazooka",  78f,   45);
+  //       sprite     interval dmg pellets spread  speed  life   name       boomR boomDmg recoil  mag reload
+  PISTOL  ("pistol",  0.28,    16,  1,     0.00f,  460f,  1.3,  "Pistol",   0f,    0,     0f,    12, 1.1),
+  SHOTGUN ("shotgun", 0.72,     9,  6,     0.32f,  380f,  0.45, "Shotgun",  0f,    0,     0f,     6, 1.7),
+  RIFLE   ("ak",      0.10,     8,  1,     0.05f,  520f,  1.1,  "Rifle",    0f,    0,     0f,    30, 2.0),
+  BAZOOKA ("bazooka", 1.25,    35,  1,     0.00f,  300f,  2.4,  "Bazooka", 78f,   45,   240f,     1, 1.5);
 
   private static final Weapon[] BY_ID = values();
 
@@ -30,10 +30,17 @@ public enum Weapon {
   public final float explosionRadius;
   /** Peak splash damage at the blast centre, falling off to a quarter at the edge. */
   public final double explosionDamage;
+  /** Self-knockback impulse (px/s) shoved onto the shooter, opposite the aim; 0 = no recoil. */
+  public final float recoil;
+  /** Rounds per magazine; the kitten reloads when it hits 0. Reserve ammo is unlimited. */
+  public final int magazineSize;
+  /** Seconds to reload a full magazine. */
+  public final double reloadTime;
 
   Weapon(String sprite, double fireInterval, double damage, int pellets, float spread,
       float projectileSpeed, double projectileLifetime, String displayName,
-      float explosionRadius, double explosionDamage) {
+      float explosionRadius, double explosionDamage, float recoil,
+      int magazineSize, double reloadTime) {
     this.sprite = sprite;
     this.fireInterval = fireInterval;
     this.damage = damage;
@@ -44,6 +51,9 @@ public enum Weapon {
     this.displayName = displayName;
     this.explosionRadius = explosionRadius;
     this.explosionDamage = explosionDamage;
+    this.recoil = recoil;
+    this.magazineSize = magazineSize;
+    this.reloadTime = reloadTime;
   }
 
   public boolean explosive() {

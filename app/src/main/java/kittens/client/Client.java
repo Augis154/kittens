@@ -1,11 +1,14 @@
 package kittens.client;
 
+import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Color;
+import java.awt.Composite;
 import java.awt.Dimension;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
+import java.awt.Shape;
 import java.awt.Stroke;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
@@ -57,6 +60,14 @@ public final class Client extends JPanel {
   private static final float RECONCILE_SNAP = 64f;
   private static final int RELEASE_GRACE_MS = 45;
 
+  /** On-screen pixels per world pixel — enlarges the whole window. */
+  private static final float RENDER_SCALE = 1.75f;
+
+  /** Number of heart icons the local player's health is split across, on the HUD. */
+  private static final int HEART_COUNT = 5;
+  private static final int HEART_SIZE = 40;
+  private static final int HEART_GAP = 44;
+
   private record Pending(long seq, float moveX, float moveY) {}
 
   private final TileMap map = TileMap.fromResource(GameConfig.MAP_RESOURCE, GameConfig.TILE);
@@ -87,7 +98,9 @@ public final class Client extends JPanel {
 
   public Client(GameClient client) {
     this.client = client;
-    setPreferredSize(new Dimension((int) map.pixelWidth(), (int) map.pixelHeight()));
+    setPreferredSize(new Dimension(
+        Math.round(map.pixelWidth() * RENDER_SCALE),
+        Math.round(map.pixelHeight() * RENDER_SCALE)));
     setBackground(FLOOR);
     setFocusable(true);
     mouseX = (int) map.pixelWidth() / 2;
@@ -149,14 +162,12 @@ public final class Client extends JPanel {
         new MouseMotionAdapter() {
           @Override
           public void mouseMoved(MouseEvent e) {
-            mouseX = e.getX();
-            mouseY = e.getY();
+            setMouseWorld(e);
           }
 
           @Override
           public void mouseDragged(MouseEvent e) {
-            mouseX = e.getX();
-            mouseY = e.getY();
+            setMouseWorld(e);
           }
         };
     addMouseMotionListener(mouse);
@@ -177,6 +188,12 @@ public final class Client extends JPanel {
             }
           }
         });
+  }
+
+  /** Cursor position in world (pre-scale) coordinates. */
+  private void setMouseWorld(MouseEvent e) {
+    mouseX = Math.round(e.getX() / RENDER_SCALE);
+    mouseY = Math.round(e.getY() / RENDER_SCALE);
   }
 
   /** Angle (radians, screen space) from the local player toward the cursor. */
@@ -366,9 +383,12 @@ public final class Client extends JPanel {
     Graphics2D g2 = (Graphics2D) g;
     g2.setRenderingHint(
         RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+    // Everything below is authored in world coordinates; scale the whole scene up to the window.
+    g2.scale(RENDER_SCALE, RENDER_SCALE);
 
     drawMap(g2);
     drawEntities(g2);
+    drawHearts(g2);
     drawHud(g2);
   }
 
@@ -588,19 +608,58 @@ public final class Client extends JPanel {
     g.drawImage(assets.weapon(weapon.sprite), 4, -w / 2, w, w, null);
     g.setTransform(saved);
 
-    // Health bar.
-    float frac = Math.clamp(hp / (float) GameConfig.PLAYER_MAX_HEALTH, 0f, 1f);
-    if (frac < 1f) {
-      int bw = t;
-      int by = y - 8;
-      g.setColor(new Color(0, 0, 0, 140));
-      g.fillRect(x, by, bw, 3);
-      g.setColor(frac > 0.4f ? new Color(120, 210, 120) : new Color(220, 110, 90));
-      g.fillRect(x, by, Math.round(bw * frac), 3);
+    // Health bar above the kitten — for other players only; the local player uses the heart HUD.
+    if (!self) {
+      float frac = Math.clamp(hp / (float) GameConfig.PLAYER_MAX_HEALTH, 0f, 1f);
+      if (frac < 1f) {
+        int bw = t;
+        int by = y - 8;
+        g.setColor(new Color(0, 0, 0, 140));
+        g.fillRect(x, by, bw, 3);
+        g.setColor(frac > 0.4f ? new Color(120, 210, 120) : new Color(220, 110, 90));
+        g.fillRect(x, by, Math.round(bw * frac), 3);
+      }
     }
 
     g.setColor(Color.WHITE);
     g.drawString("P" + id, x, y - 12);
+  }
+
+  /** The local player's health as a row of heart icons in the top-left corner. */
+  private void drawHearts(Graphics2D g) {
+    int me = client.myPlayerId();
+    if (me < 0) {
+      return;
+    }
+    float hp = hpOf(me);
+    float perHeart = (float) GameConfig.PLAYER_MAX_HEALTH / HEART_COUNT;
+    int size = HEART_SIZE;
+    int gap = HEART_GAP;
+    int x0 = 14;
+    int y0 = 12;
+
+    g.setColor(new Color(0, 0, 0, 80));
+    g.fillRoundRect(x0 - 8, y0 - 6, (HEART_COUNT - 1) * gap + size + 16, size + 12, 14, 14);
+
+    BufferedImage heart = assets.image("utils/heart.png");
+    Composite baseComposite = g.getComposite();
+    Shape baseClip = g.getClip();
+    for (int i = 0; i < HEART_COUNT; i++) {
+      int hx = x0 + i * gap;
+      float frac = Math.clamp((hp - i * perHeart) / perHeart, 0f, 1f);
+
+      // Empty slot: a faint heart.
+      g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.18f));
+      g.drawImage(heart, hx, y0, size, size, null);
+      g.setComposite(baseComposite);
+
+      // Filled portion: full heart, clipped horizontally to the fraction remaining.
+      if (frac > 0f) {
+        g.setClip(hx, y0, Math.max(1, Math.round(size * frac)), size);
+        g.drawImage(heart, hx, y0, size, size, null);
+        g.setClip(baseClip);
+      }
+    }
   }
 
   private void drawHud(Graphics2D g) {
@@ -634,6 +693,45 @@ public final class Client extends JPanel {
       g.setColor(active ? Color.WHITE : new Color(255, 255, 255, 110));
       g.drawString(label, x + 6, baseY);
       x += wpx + 4;
+    }
+
+    drawAmmo(g);
+  }
+
+  /** Ammo readout / reload bar in the bottom-right corner. */
+  private void drawAmmo(Graphics2D g) {
+    if (client.myPlayerId() < 0) {
+      return;
+    }
+    int right = (int) map.pixelWidth() - 12;
+    int baseY = (int) map.pixelHeight() - 14;
+    float reload = client.viewerReload();
+    int mag = selectedWeapon.magazineSize;
+
+    if (reload > 0f) {
+      String txt = "RELOADING";
+      int tw = g.getFontMetrics().stringWidth(txt);
+      int barW = 96;
+      int panelW = Math.max(tw, barW) + 16;
+      g.setColor(new Color(0, 0, 0, 90));
+      g.fillRoundRect(right - panelW, baseY - 26, panelW, 34, 10, 10);
+      g.setColor(new Color(255, 210, 120));
+      g.drawString(txt, right - panelW + 8, baseY - 12);
+      g.setColor(new Color(255, 255, 255, 50));
+      g.fillRect(right - panelW + 8, baseY - 6, barW, 5);
+      g.setColor(new Color(255, 210, 120));
+      g.fillRect(right - panelW + 8, baseY - 6, Math.round(barW * Math.clamp(reload, 0f, 1f)), 5);
+    } else {
+      // Clamp for display: the server's weapon can lag a fresh number-key press by a tick.
+      int ammo = Math.clamp(client.viewerAmmo(), 0, mag);
+      String txt = ammo + " / " + mag;
+      int tw = g.getFontMetrics().stringWidth(txt);
+      int panelW = tw + 20;
+      g.setColor(new Color(0, 0, 0, 90));
+      g.fillRoundRect(right - panelW, baseY - 22, panelW, 30, 10, 10);
+      g.setColor(ammo == 0 ? new Color(230, 110, 90)
+          : ammo <= Math.max(1, mag / 4) ? new Color(240, 200, 110) : Color.WHITE);
+      g.drawString(txt, right - panelW + 10, baseY - 3);
     }
   }
 
