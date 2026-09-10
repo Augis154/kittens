@@ -152,6 +152,36 @@ final class ServerPlayer extends Actor {
     return magAmmo[weapon.id()];
   }
 
+  /** Whether a health pickup would do anything for this player. */
+  boolean wantsHealth() {
+    return !dead() && health < maxHealth;
+  }
+
+  /**
+   * Whether an ammo pickup would do anything: any magazine short of full, or a reload running that
+   * {@link #restockAmmo()} would cut short.
+   */
+  boolean wantsAmmo() {
+    if (reloadTimer > 0) {
+      return true;
+    }
+    for (int i = 0; i < magAmmo.length; i++) {
+      if (magAmmo[i] < Weapon.byId(i).magazineSize()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Tops every magazine up and cancels any reload in progress. Reserve ammo is unlimited, so what
+   * an ammo crate really buys is the reload time it skips.
+   */
+  void restockAmmo() {
+    reloadTimer = 0;
+    refillAllMagazines();
+  }
+
   /**
    * Start a manual reload of the current weapon. Ignored while already reloading or when the
    * magazine is full, so spamming the key can't cancel and restart the timer.

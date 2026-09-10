@@ -17,9 +17,9 @@ import kittens.common.net.EntityState;
 import kittens.common.weapon.Weapon;
 
 /**
- * Draws the arena: tiles, entities, and cosmetic effects. Everything here is authored in world
- * coordinates — the caller has already scaled the graphics context — so no method may consult the
- * window size or the cursor. Screen-space overlay work belongs in {@link Hud}.
+ * Draws the arena: tiles, entities, pickups, and cosmetic effects. Everything here is authored in
+ * world coordinates — the caller has already scaled the graphics context — so no method may consult
+ * the window size or the cursor. Screen-space overlay work belongs in {@link Hud}.
  *
  * <p>Stateless apart from the map and the asset cache: what to draw arrives in a {@link Scene}
  * every frame, which keeps this class a pure function of the latest snapshot plus {@link WorldView}
@@ -32,6 +32,12 @@ final class Renderer {
    * starts slow and quickens as it runs out.
    */
   private static final float GRACE_RUSH_SECONDS = 0.6f;
+
+  /**
+   * Seconds of life left below which a pickup starts blinking, faster the closer it is to
+   * expiring — the only warning the player gets that a crate is about to be gone.
+   */
+  private static final float PICKUP_BLINK_SECONDS = 3f;
 
   /**
    * The inclusive block of tiles worth drawing this frame. The level is larger than the window, so
@@ -143,12 +149,20 @@ final class Renderer {
     WorldView view = scene.view();
     int me = scene.myPlayerId();
 
-    // 1. Bullets (dead-reckoned between snapshots)
+    // 1. Pickups, first so everything else stands on top of them
+    for (EntityState e : entities.values()) {
+      boolean health = "health".equals(e.kind());
+      if (health || "ammo".equals(e.kind())) {
+        drawPickup(g, e, health);
+      }
+    }
+
+    // 2. Bullets (dead-reckoned between snapshots)
     for (float[] b : view.bullets()) {
       drawBullet(g, b[0], b[1], b[2], (int) b[5]);
     }
 
-    // 2. Enemies
+    // 3. Enemies
     for (EntityState e : entities.values()) {
       if ("rat".equals(e.kind()) || "mouse".equals(e.kind())) {
         float[] pos = view.smoothed(e.id());
@@ -157,7 +171,7 @@ final class Renderer {
       }
     }
 
-    // 3. Remote players
+    // 4. Remote players
     for (EntityState e : entities.values()) {
       if (e.id() == me || !"cat".equals(e.kind())) {
         continue;
@@ -173,7 +187,7 @@ final class Renderer {
           false);
     }
 
-    // 4. Local player: the prediction, falling back to raw authority until it exists
+    // 5. Local player: the prediction, falling back to raw authority until it exists
     EntityState mine = me < 0 ? null : entities.get(me);
     if (mine != null) {
       if (scene.predicted() != null) {
@@ -184,12 +198,78 @@ final class Renderer {
       }
     }
 
-    // 5. Explosions (on top)
+    // 6. Explosions (on top)
     for (EntityState e : entities.values()) {
       if ("boom".equals(e.kind())) {
         drawBoom(g, e);
       }
     }
+  }
+
+  /**
+   * A hovering crate on the floor: medkit green with a cross, or amber with a clip of rounds. The
+   * bob comes from the wall clock offset by the entity id, so a scattering of crates never pulses
+   * in unison; only the crate rises, leaving its shadow on the floor to sell the hover.
+   */
+  private void drawPickup(Graphics2D g, EntityState e, boolean health) {
+    int size = GameConfig.PICKUP_SIZE;
+    Color tint = health ? Theme.GOOD : Theme.WARN;
+    double clock = System.nanoTime() / 1e9;
+    float bob = (float) Math.sin(clock * 2.6 + e.id()) * 2.5f;
+
+    // hp carries the pickup's remaining life (see EntityState): blink out the last few seconds.
+    float alpha = blinkAlpha(e.hp(), clock);
+
+    drawShadow(g, e.x(), e.y(), size);
+
+    Composite baseComposite = g.getComposite();
+    g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, alpha));
+
+    // Coloured pool on the floor, so a crate is spottable across the room before its icon reads.
+    int glowW = Math.round(size * 1.75f);
+    int glowH = Math.round(size * 0.9f);
+    g.setColor(Theme.alpha(tint, 0.16f));
+    g.fillOval(Math.round(e.x() - glowW / 2f), Math.round(e.y() - glowH / 2f), glowW, glowH);
+
+    int x = Math.round(e.x() - size / 2f);
+    int y = Math.round(e.y() - size / 2f + bob);
+    g.setColor(new Color(18, 20, 26, 230));
+    g.fillRoundRect(x, y, size, size, 6, 6);
+    g.setColor(tint);
+    g.drawRoundRect(x, y, size - 1, size - 1, 6, 6);
+
+    // Icons are drawn rather than sprited: at 20px a scaled-down bitmap turns to mush, and these
+    // two shapes stay legible.
+    g.setColor(tint);
+    if (health) {
+      int arm = 4;
+      int span = size - 8;
+      g.fillRoundRect(Math.round(x + (size - arm) / 2f), y + 4, arm, span, 2, 2);
+      g.fillRoundRect(x + 4, Math.round(y + (size - arm) / 2f), span, arm, 2, 2);
+    } else {
+      // Three rounds standing in a clip.
+      int roundW = 3;
+      int gap = 3;
+      int startX = Math.round(x + size / 2f - (3 * roundW + 2 * gap) / 2f);
+      for (int i = 0; i < 3; i++) {
+        g.fillRoundRect(startX + i * (roundW + gap), y + 5, roundW, size - 10, 3, 3);
+      }
+    }
+
+    g.setComposite(baseComposite);
+  }
+
+  /**
+   * Opacity of a pickup with {@code life} seconds left: solid until it is nearly out of time, then
+   * a blink that quickens as the clock runs down. Never reaches 0, so a crate stays findable right
+   * up to the moment it goes.
+   */
+  private static float blinkAlpha(float life, double clock) {
+    if (life >= PICKUP_BLINK_SECONDS) {
+      return 1f;
+    }
+    double rate = 7.0 + (PICKUP_BLINK_SECONDS - life) * 4.0;
+    return 0.3f + 0.7f * (float) Math.abs(Math.sin(clock * rate));
   }
 
   private void drawBullet(Graphics2D g, float bx, float by, float angle, int weaponId) {
@@ -425,6 +505,15 @@ final class Renderer {
           int r = Math.round(6 + (1f - t) * 12f);
           g.setStroke(new BasicStroke(2f));
           g.setColor(Theme.alpha(Color.WHITE, 0.8f * t));
+          g.drawOval(Math.round(fx.x()) - r, Math.round(fx.y()) - r, r * 2, r * 2);
+          g.setStroke(baseStroke);
+        }
+        case PICKUP -> {
+          // Ring flying outward from where the crate stood, in that crate's own colour.
+          Color tint = fx.value() == 1 ? Theme.GOOD : Theme.WARN;
+          int r = Math.round(6 + (1f - t) * 18f);
+          g.setStroke(new BasicStroke(2.5f));
+          g.setColor(Theme.alpha(tint, 0.9f * t));
           g.drawOval(Math.round(fx.x()) - r, Math.round(fx.y()) - r, r * 2, r * 2);
           g.setStroke(baseStroke);
         }

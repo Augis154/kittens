@@ -18,10 +18,10 @@ import kittens.common.sim.PathField;
 import kittens.common.weapon.Weapon;
 
 /**
- * The authoritative simulation: connected players, computer-controlled enemies, live projectiles
- * and the map. One {@link #tick(double)} advances the world by a fixed step; {@link
- * #snapshotFor(int)} freezes it for the wire. No sockets or threading policy here — {@code Server}
- * owns those.
+ * The authoritative simulation: connected players, computer-controlled enemies, live projectiles,
+ * scattered pickups and the map. One {@link #tick(double)} advances the world by a fixed step;
+ * {@link #snapshotFor(int)} freezes it for the wire. No sockets or threading policy here —
+ * {@code Server} owns those.
  */
 final class GameWorld {
   private final TileMap map;
@@ -29,10 +29,12 @@ final class GameWorld {
   private final ConcurrentHashMap<Integer, Enemy> enemies = new ConcurrentHashMap<>();
   private final ConcurrentLinkedQueue<Projectile> projectiles = new ConcurrentLinkedQueue<>();
   private final ConcurrentLinkedQueue<Explosion> explosions = new ConcurrentLinkedQueue<>();
+  private final ConcurrentLinkedQueue<Pickup> pickups = new ConcurrentLinkedQueue<>();
   private final AtomicInteger nextProjectileId = new AtomicInteger(GameConfig.PROJECTILE_ID_BASE);
   private final AtomicInteger nextExplosionId = new AtomicInteger(GameConfig.EXPLOSION_ID_BASE);
   private final AtomicLong tick = new AtomicLong();
   private final SpawnDirector spawnDirector = new SpawnDirector();
+  private final PickupDirector pickupDirector = new PickupDirector();
 
   GameWorld(TileMap map) {
     this.map = map;
@@ -70,14 +72,27 @@ final class GameWorld {
       }
     }
 
-    // 3. Update spawn director and add newly spawned enemies
+    // 3. Age pickups and hand out any a player is now standing on, then scatter fresh ones
+    for (Pickup pk : pickups) {
+      pk.update(dt);
+      for (ServerPlayer p : players.values()) {
+        if (pk.tryCollect(p)) {
+          break;
+        }
+      }
+    }
+    List<Pickup> newPickups = new ArrayList<>();
+    pickupDirector.tick(dt, map, players.values(), pickups, newPickups);
+    pickups.addAll(newPickups);
+
+    // 4. Update spawn director and add newly spawned enemies
     List<Enemy> newEnemies = new ArrayList<>();
     spawnDirector.tick(dt, map, players.values(), enemies.values(), newEnemies);
     for (Enemy enemy : newEnemies) {
       enemies.put(enemy.id(), enemy);
     }
 
-    // 4. Update computer-controlled enemies, routed around walls by one shared path field
+    // 5. Update computer-controlled enemies, routed around walls by one shared path field
     if (!enemies.isEmpty()) {
       PathField pursuit = PathField.toward(map, huntedPositions());
       for (Enemy enemy : enemies.values()) {
@@ -85,25 +100,26 @@ final class GameWorld {
       }
     }
 
-    // 5. Update projectiles and check collisions with map, players, and enemies
+    // 6. Update projectiles and check collisions with map, players, and enemies
     for (Projectile pr : projectiles) {
       pr.tick(dt, map, players.values(), enemies.values());
     }
 
-    // 6. Detonate explosive projectiles that just died (bazooka AOE)
+    // 7. Detonate explosive projectiles that just died (bazooka AOE)
     for (Projectile pr : projectiles) {
       if (pr.consumeExplosion()) {
         explode(pr.pos(), pr.explosionRadius(), pr.explosionDamage(), pr.ownerId());
       }
     }
 
-    // 7. Age blast markers, cull dead projectiles / enemies / explosions
+    // 8. Age blast markers, cull dead projectiles / enemies / explosions / pickups
     for (Explosion ex : explosions) {
       ex.tick(dt);
     }
     projectiles.removeIf(pr -> !pr.alive());
     enemies.values().removeIf(Enemy::isDead);
     explosions.removeIf(ex -> !ex.alive());
+    pickups.removeIf(pk -> !pk.isAlive());
   }
 
   /**
@@ -192,7 +208,11 @@ final class GameWorld {
   Snapshot snapshotFor(int viewerId) {
     List<EntityState> entities =
         new ArrayList<>(
-            players.size() + enemies.size() + projectiles.size() + explosions.size());
+            players.size()
+                + enemies.size()
+                + projectiles.size()
+                + explosions.size()
+                + pickups.size());
     for (ServerPlayer p : players.values()) {
       entities.add(p.toEntityState());
     }
@@ -204,6 +224,9 @@ final class GameWorld {
     }
     for (Explosion ex : explosions) {
       entities.add(ex.toEntityState());
+    }
+    for (Pickup pk : pickups) {
+      entities.add(pk.toEntityState());
     }
     ServerPlayer viewer = players.get(viewerId);
     long ackSeq = viewer == null ? -1 : viewer.lastProcessedSeq();

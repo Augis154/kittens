@@ -78,9 +78,12 @@ resource must be on the classpath, hence `app/src/main/resources`.
 
 When probing, be careful that the *probe* isn't what's wrong. Traps hit repeatedly in practice: a
 plain `Actor` target has finite health and no respawn, so enemies kill it mid-measurement and every
-later assertion silently reads a dead target; firing "into open space" usually means firing into a
-wall a few tiles away, so check the map before picking coordinates; and enemies spawned already
-touching their target swing in lockstep, which flatters anything that rate-limits damage.
+later assertion silently reads a dead target; a freshly constructed `ServerPlayer` carries
+`RESPAWN_INVULNERABILITY` of spawn grace, so `damage()` called straight after the constructor is
+silently dropped and the probe goes on measuring a player at full health; firing "into open space"
+usually means firing into a wall a few tiles away, so check the map before picking coordinates; and
+enemies spawned already touching their target swing in lockstep, which flatters anything that
+rate-limits damage.
 
 To *see* the client instead of measuring it, don't try to screen-grab: under WSLg the X11 root
 window is black, so `ffmpeg -f x11grab` captures nothing. Render the panel offscreen instead — build
@@ -104,7 +107,7 @@ rendering and no socket code.** It is the shared simulation both sides run.
   (`Weapon` → `Pistol`/`Shotgun`/`Rifle`/`Bazooka`), `sim/` (`PlayerMotion`, `PathField`),
   `net/` (the DTOs), `GameConfig`.
 - **`server/`** — `Server` (socket accept), `ClientConnection`, `ServerLoop`, `GameWorld`,
-  `ServerPlayer`, `Projectile`, `Explosion`, `SpawnDirector`.
+  `ServerPlayer`, `Projectile`, `Explosion`, `Pickup`, `SpawnDirector`, `PickupDirector`.
 - **`client/`** — `GameClient` (networking), `Client` (window, input, prediction, frame loop),
   `Camera` (viewport, follow, world/screen conversion), `WorldView` (between-snapshot smoothing +
   cosmetic effects), `Renderer` (arena drawing), `Hud` (screen-space overlay), `Theme` (palette,
@@ -118,17 +121,22 @@ rooms, a central hub, a corridor ring), deliberately larger than the 25x15-tile 
 camera has somewhere to scroll. `maps/arena.txt` is the original single-screen map, exactly one
 viewport, which is why it stays around for probes.
 
+Plain `.` floor is also where pickups land: `TileMap.floorPoints()` is every open cell that is
+*not* a spawn point, precomputed at load, and `PickupDirector` samples it. So marking a cell `S`
+takes it out of the pickup pool as well as adding a wave entrance.
+
 A level has to be rectangular, sealed by walls on every edge, and have all its open cells mutually
 reachable — **nothing checks any of this at load time**, so a level with a walled-off room simply
-strands enemies in it. Corridors want to be at least 2 tiles wide (a rat's box is 22px against a
-32px tile), and avoiding lanes that run the full width or height keeps sightlines from dominating.
+strands enemies and pickups in it. Corridors want to be at least 2 tiles wide (a rat's box is 22px
+against a 32px tile), and avoiding lanes that run the full width or height keeps sightlines from
+dominating.
 
 ### Authority and prediction
 
 `ServerLoop` is a fixed-timestep accumulator on a daemon thread at `GameConfig.TICK_HZ` (30 Hz).
-Each tick `GameWorld.tick(dt)` runs a fixed pipeline — players → weapon fire → spawn director →
-enemies → projectiles → explosion detonation → cull — then `Server.tick` sends **one snapshot per
-client**, because `ackSeq`, `viewerAmmo`, and `viewerReload` are all recipient-specific.
+Each tick `GameWorld.tick(dt)` runs a fixed pipeline — players → weapon fire → pickups → spawn
+director → enemies → projectiles → explosion detonation → cull — then `Server.tick` sends **one
+snapshot per client**, because `ackSeq`, `viewerAmmo`, and `viewerReload` are all recipient-specific.
 
 `Client` renders at 180 FPS but sends input at exactly `TICK_HZ`. It predicts the local player by
 applying input immediately to its own copy of the movement model, then on each new snapshot
@@ -153,13 +161,15 @@ records: `Join`, `JoinAccepted`, `InputCommand`, `Snapshot`. `MessageCodec` wrap
 
 `EntityState` is one flat render-ready row. Two conventions to know:
 
-- `kind` is a sprite tag: `"cat"`, `"rat"`, `"mouse"`, `"bullet"`, `"boom"`.
-- **Explosions overload the fields**: for `"boom"`, `angle` carries the current expanding radius and
-  `hp` the final radius. Adding a sixth entity kind will likely need a better shape than this.
+- `kind` is a sprite tag: `"cat"`, `"rat"`, `"mouse"`, `"bullet"`, `"boom"`, `"health"`, `"ammo"`.
+- **Two kinds overload the fields** rather than widening the record for everyone: for `"boom"`,
+  `angle` carries the current expanding radius and `hp` the final radius; for `"health"`/`"ammo"`,
+  `hp` carries the pickup's remaining lifetime in seconds. Both are read only for presentation. A
+  third overload is the point at which this wants a better shape.
 
-Adding a field to `EntityState` touches all four construction sites (`ServerPlayer`, `Enemy`,
-`Projectile`, `Explosion`). Records serialize by field, and both sides share the class, so the wire
-stays consistent automatically.
+Adding a field to `EntityState` touches all five construction sites (`ServerPlayer`, `Enemy`,
+`Projectile`, `Explosion`, `Pickup`). Records serialize by field, and both sides share the class, so
+the wire stays consistent automatically.
 
 ### Threading
 
@@ -189,6 +199,21 @@ weaving. Both go through two base-class helpers:
 `PathField` is a multi-source BFS distance field over the tile grid, rebuilt by `GameWorld` once per
 tick from every living player and shared by all enemies. Rebuilding is cheaper than caching it
 correctly at this map size and is never stale.
+
+### Pickups
+
+`PickupDirector` drops one health or ammo `Pickup` every few seconds, up to a cap, on a random
+plain-floor tile clear of the players and of the crates already out. Each expires on its own timer,
+so the steady state is a handful of crates that keep relocating rather than a stockpile.
+
+Two rules are worth knowing before touching them:
+
+- **A pickup is only consumed if it would do something.** A kitten at full health walks over a
+  medkit; one with every magazine full walks over a crate. `Pickup.tryCollect` asks
+  `ServerPlayer.wantsHealth`/`wantsAmmo` first, and kills the pickup the moment it is taken so two
+  players cannot share one. Collection is box overlap, not a radius.
+- **Reserve ammo is unlimited**, so what an ammo crate actually buys is the reload it skips —
+  `restockAmmo` tops up every magazine *and* cancels a reload in flight.
 
 ### Collision
 
@@ -222,7 +247,9 @@ correctly at this map size and is never stale.
   new that walks the whole grid per frame will cost ~4x more than it needs to.
 - **All gameplay tuning lives in `GameConfig`**, shared so client and server agree. Put new numbers
   there rather than inline, and keep the reasoning in the javadoc — several constants document
-  measured trade-offs, not arbitrary picks.
+  measured trade-offs, not arbitrary picks. The exception the directors already take: `SpawnDirector`
+  and `PickupDirector` keep their cadence, caps and spacing as private constants, because no client
+  ever has to agree on them.
 - **Weapons are singletons of a class hierarchy, and per-weapon tuning is the one exception to
   `GameConfig`.** `Weapon` is abstract with overridable accessors; each concrete weapon
   (`Pistol`, `Shotgun`, `Rifle`, `Bazooka`) passes its numbers to the base constructor. Subclass

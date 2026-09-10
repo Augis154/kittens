@@ -3,6 +3,7 @@ package kittens.client;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import kittens.common.GameConfig;
@@ -12,7 +13,8 @@ import kittens.common.weapon.Weapon;
 /**
  * Presentation-side smoothing of everything the local player does <em>not</em> control: remote
  * kittens and enemies are eased toward their snapshot positions, projectiles are dead-reckoned
- * between snapshots, and health drops are turned into hit flashes and floating damage numbers.
+ * between snapshots, and health drops are turned into hit flashes and floating damage numbers. It
+ * also spots pickups disappearing so a collection reads as a pop rather than a sprite blinking out.
  *
  * <p>None of this is authoritative and none of it feeds prediction — {@link Client} owns the local
  * player's predicted position, which is reconciled against the server rather than smoothed. This
@@ -35,6 +37,13 @@ final class WorldView {
   /** One server tick — how stale a projectile's first snapshot already is when we see it. */
   private static final double TICK_DT = 1.0 / GameConfig.TICK_HZ;
 
+  /**
+   * Life (seconds) a vanished pickup must still have had for its disappearance to count as somebody
+   * collecting it. One that simply expired was last seen with under a tick left, so anything well
+   * above that was taken — a couple of ticks of slack in case a snapshot is late.
+   */
+  private static final float PICKUP_TAKEN_LIFE = 0.3f;
+
   /** A short-lived cosmetic effect in world space. Client-only: never sent, never simulated. */
   static final class Fx {
     enum Kind {
@@ -43,7 +52,9 @@ final class WorldView {
       /** Expanding ring on an enemy that just took damage. */
       HIT,
       /** Floating damage number drifting off the enemy that took the hit. */
-      DAMAGE
+      DAMAGE,
+      /** Ring popping outward where a pickup was collected. */
+      PICKUP
     }
 
     private final Kind kind;
@@ -80,7 +91,10 @@ final class WorldView {
       return angle;
     }
 
-    /** Damage amount for {@link Kind#DAMAGE}; 1 marks an explosive muzzle flash. */
+    /**
+     * Damage amount for {@link Kind#DAMAGE}; 1 marks an explosive muzzle flash, and for
+     * {@link Kind#PICKUP} a medkit rather than an ammo crate.
+     */
     int value() {
       return value;
     }
@@ -97,6 +111,9 @@ final class WorldView {
   // Client-simulated projectiles: id -> {x, y, angle, vx, vy, weaponId} for smooth flight.
   private final Map<Integer, float[]> bullets = new HashMap<>();
 
+  // Pickups: last {x, y, life, isHealth} seen per id, so one vanishing can be told from expiring.
+  private final Map<Integer, float[]> pickupSeen = new HashMap<>();
+
   // Hit feedback: last health seen per enemy, and how long each one stays lit after losing some.
   private final Map<Integer, Float> enemyHp = new HashMap<>();
   private final Map<Integer, Float> enemyFlash = new HashMap<>();
@@ -107,6 +124,7 @@ final class WorldView {
     interpolateRemotes(entities, myPlayerId);
     updateBullets(dt, entities);
     trackEnemyDamage(entities);
+    trackPickups(entities);
     advanceEffects(dt);
   }
 
@@ -132,8 +150,8 @@ final class WorldView {
   private void interpolateRemotes(Map<Integer, EntityState> live, int myPlayerId) {
     remotePos.keySet().removeIf(id -> id == myPlayerId || !live.containsKey(id));
     for (EntityState e : live.values()) {
-      if (e.id() == myPlayerId || "bullet".equals(e.kind()) || "boom".equals(e.kind())) {
-        continue; // bullets are dead-reckoned below, booms are drawn straight from the snapshot
+      if (e.id() == myPlayerId || !isSmoothed(e.kind())) {
+        continue; // bullets are dead-reckoned below; booms and pickups never move
       }
       float[] rp = remotePos.get(e.id());
       if (rp == null) {
@@ -143,6 +161,14 @@ final class WorldView {
         rp[1] += (e.y() - rp[1]) * REMOTE_SMOOTHING;
       }
     }
+  }
+
+  /**
+   * Whether a kind's position is worth easing between snapshots. A positive list on purpose: only
+   * actors actually travel between the positions two snapshots report.
+   */
+  private static boolean isSmoothed(String kind) {
+    return "cat".equals(kind) || "rat".equals(kind) || "mouse".equals(kind);
   }
 
   /** Flies projectiles forward every client frame and reconciles them with server snapshots. */
@@ -228,6 +254,32 @@ final class WorldView {
       effects.add(
           new Fx(Fx.Kind.DAMAGE, x, y - GameConfig.TILE * 0.4f, 0f,
               Math.max(1, Math.round(previous - e.hp())), 0.7f));
+    }
+  }
+
+  /**
+   * Turns a pickup disappearing into a collection pop. Nothing on the wire says who took what — but
+   * an expired pickup is last seen with its clock nearly run out, so any that vanishes with life to
+   * spare was walked into by somebody.
+   */
+  private void trackPickups(Map<Integer, EntityState> live) {
+    Iterator<Map.Entry<Integer, float[]>> gone = pickupSeen.entrySet().iterator();
+    while (gone.hasNext()) {
+      Map.Entry<Integer, float[]> entry = gone.next();
+      if (live.containsKey(entry.getKey())) {
+        continue;
+      }
+      float[] last = entry.getValue();
+      if (last[2] > PICKUP_TAKEN_LIFE) {
+        effects.add(new Fx(Fx.Kind.PICKUP, last[0], last[1], 0f, (int) last[3], 0.34f));
+      }
+      gone.remove();
+    }
+    for (EntityState e : live.values()) {
+      boolean health = "health".equals(e.kind());
+      if (health || "ammo".equals(e.kind())) {
+        pickupSeen.put(e.id(), new float[] {e.x(), e.y(), e.hp(), health ? 1f : 0f});
+      }
     }
   }
 

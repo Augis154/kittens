@@ -60,6 +60,25 @@ public final class GameConfig {
   /** Explosion (blast marker) entity ids start here. */
   public static final int EXPLOSION_ID_BASE = 2_000_000;
 
+  /** Pickup (health / ammo crate) entity ids start here. */
+  public static final int PICKUP_ID_BASE = 3_000_000;
+
+  /**
+   * Side length of a pickup's (square) box, in pixels. Shared because the server collects on box
+   * overlap and the client draws the crate at this size — the reward has to look like what you
+   * have to touch.
+   */
+  public static final int PICKUP_SIZE = 20;
+
+  /**
+   * Seconds a pickup stays on the floor before it expires. Long enough to be worth crossing a room
+   * for, short enough that the map recycles which rooms are worth visiting.
+   */
+  public static final double PICKUP_LIFETIME = 22.0;
+
+  /** Health one medkit restores. Deliberately short of a full heal. */
+  public static final double PICKUP_HEALTH_AMOUNT = 35.0;
+
   /** Whether projectiles can hit other players. Flips off once enemies exist to shoot instead. */
   public static final boolean FRIENDLY_FIRE = false;
 

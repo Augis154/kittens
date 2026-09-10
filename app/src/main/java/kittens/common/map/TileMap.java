@@ -30,13 +30,21 @@ public final class TileMap {
   private final float tileSize;
   private final Tile[][] tiles; // [row][col]
   private final List<Vec2> spawnPoints;
+  private final List<Vec2> floorPoints;
 
-  private TileMap(int width, int height, float tileSize, Tile[][] tiles, List<Vec2> spawnPoints) {
+  private TileMap(
+      int width,
+      int height,
+      float tileSize,
+      Tile[][] tiles,
+      List<Vec2> spawnPoints,
+      List<Vec2> floorPoints) {
     this.width = width;
     this.height = height;
     this.tileSize = tileSize;
     this.tiles = tiles;
     this.spawnPoints = List.copyOf(spawnPoints);
+    this.floorPoints = List.copyOf(floorPoints);
   }
 
   public static TileMap fromText(String text, float tileSize) {
@@ -55,17 +63,21 @@ public final class TileMap {
 
     Tile[][] tiles = new Tile[height][width];
     List<Vec2> spawns = new ArrayList<>();
+    List<Vec2> floors = new ArrayList<>();
     for (int row = 0; row < height; row++) {
       String line = rows.get(row);
       for (int col = 0; col < width; col++) {
         Tile tile = col < line.length() ? Tile.fromGlyph(line.charAt(col)) : Tile.FLOOR;
         tiles[row][col] = tile;
+        Vec2 center = new Vec2((col + 0.5f) * tileSize, (row + 0.5f) * tileSize);
         if (tile == Tile.SPAWN) {
-          spawns.add(new Vec2((col + 0.5f) * tileSize, (row + 0.5f) * tileSize));
+          spawns.add(center);
+        } else if (tile == Tile.FLOOR) {
+          floors.add(center);
         }
       }
     }
-    return new TileMap(width, height, tileSize, tiles, spawns);
+    return new TileMap(width, height, tileSize, tiles, spawns, floors);
   }
 
   public static TileMap fromFile(Path path, float tileSize) {
@@ -152,5 +164,14 @@ public final class TileMap {
   /** World-space centres of every {@link Tile#SPAWN} cell, in row-major order. */
   public List<Vec2> spawnPoints() {
     return spawnPoints;
+  }
+
+  /**
+   * World-space centres of every plain {@link Tile#FLOOR} cell, in row-major order — every open
+   * cell that is <em>not</em> a spawn point. Precomputed at load, so picking a random free spot
+   * (pickup placement, say) costs one index rather than a scan of the grid.
+   */
+  public List<Vec2> floorPoints() {
+    return floorPoints;
   }
 }
