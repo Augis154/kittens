@@ -100,8 +100,9 @@ Three packages under `app/src/main/java/kittens/`, with a hard rule: **`common` 
 rendering and no socket code.** It is the shared simulation both sides run.
 
 - **`common/`** — `math/` (`Vec2`, `Aabb`), `map/` (`TileMap`, `Tile`), `entity/`
-  (`GameObject` → `Actor` → `Enemy` → `Rat`/`Mouse`), `weapon/Weapon`, `sim/`
-  (`PlayerMotion`, `PathField`), `net/` (the DTOs), `GameConfig`.
+  (`GameObject` → `Actor` → `Enemy` → `Rat`/`Mouse`), `weapon/`
+  (`Weapon` → `Pistol`/`Shotgun`/`Rifle`/`Bazooka`), `sim/` (`PlayerMotion`, `PathField`),
+  `net/` (the DTOs), `GameConfig`.
 - **`server/`** — `Server` (socket accept), `ClientConnection`, `ServerLoop`, `GameWorld`,
   `ServerPlayer`, `Projectile`, `Explosion`, `SpawnDirector`.
 - **`client/`** — `GameClient` (networking), `Client` (window, input, prediction, frame loop),
@@ -222,6 +223,13 @@ correctly at this map size and is never stale.
 - **All gameplay tuning lives in `GameConfig`**, shared so client and server agree. Put new numbers
   there rather than inline, and keep the reasoning in the javadoc — several constants document
   measured trade-offs, not arbitrary picks.
+- **Weapons are singletons of a class hierarchy, and per-weapon tuning is the one exception to
+  `GameConfig`.** `Weapon` is abstract with overridable accessors; each concrete weapon
+  (`Pistol`, `Shotgun`, `Rifle`, `Bazooka`) passes its numbers to the base constructor. Subclass
+  constructors are package-private and the only instances are the constants on `Weapon`, so code
+  may compare weapons with `==`. `Weapon.id()` is the wire value *and* the index into the registry
+  behind `byId`/`count` — a static check enforces that at class init, so adding a weapon means
+  appending to the registry and giving it the next id, never renumbering an existing one.
 - Entity id ranges keep kinds from colliding: players from 0, enemies from `ENEMY_ID_BASE`,
   projectiles from `PROJECTILE_ID_BASE`, explosions from `EXPLOSION_ID_BASE`.
 - `GameConfig.FRIENDLY_FIRE` is a compile-time `false`, so the player-hit branches in `Projectile`
@@ -234,9 +242,6 @@ correctly at this map size and is never stale.
 
 Not bugs to fix on sight — context so you don't mistake them for accidents:
 
-- **`Weapon` is an enum with public final fields.** Elegant now, but a dead end for the Factory /
-  Strategy / Decorator work the patterns requirement will need. Converting it is cheap today and
-  expensive later.
 - **`Client` still owns input.** Rendering is out (`Renderer`, `Hud`, `WorldView`), leaving ~375
   lines of window setup, key/mouse handling, prediction, and the frame loop. The design brief also
   asks for an `InputHandler` and `Screen` states (`MainMenu` / `Lobby` / `InGame`); neither exists,

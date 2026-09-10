@@ -45,11 +45,11 @@ final class Projectile extends GameObject {
     this.ownerId = ownerId;
     this.weaponId = weapon.id();
     this.velocity = Vec2.of((float) Math.cos(angle), (float) Math.sin(angle))
-        .scale(weapon.projectileSpeed);
-    this.damage = weapon.damage;
-    this.explosionRadius = weapon.explosionRadius;
-    this.explosionDamage = weapon.explosionDamage;
-    this.life = weapon.projectileLifetime;
+        .scale(weapon.projectileSpeed());
+    this.damage = weapon.damage();
+    this.explosionRadius = weapon.explosionRadius();
+    this.explosionDamage = weapon.explosionDamage();
+    this.life = weapon.projectileLifetime();
   }
 
   boolean alive() {

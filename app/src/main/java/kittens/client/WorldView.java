@@ -159,7 +159,7 @@ final class WorldView {
         continue;
       }
       Weapon weapon = Weapon.byId(e.weaponId());
-      float speed = weapon.projectileSpeed;
+      float speed = weapon.projectileSpeed();
       float vx = (float) Math.cos(e.angle()) * speed;
       float vy = (float) Math.sin(e.angle()) * speed;
 

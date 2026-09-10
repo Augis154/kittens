@@ -171,17 +171,17 @@ final class GameWorld {
                 Vec2.of((float) Math.cos(base), (float) Math.sin(base))
                     .scale(GameConfig.PLAYER_SIZE * 0.5f + 4f));
     ThreadLocalRandom rnd = ThreadLocalRandom.current();
-    for (int pellet = 0; pellet < w.pellets; pellet++) {
+    for (int pellet = 0; pellet < w.pellets(); pellet++) {
       float angle =
-          w.spread > 0f ? base + (float) rnd.nextDouble(-w.spread, w.spread) : base;
+          w.spread() > 0f ? base + (float) rnd.nextDouble(-w.spread(), w.spread()) : base;
       projectiles.add(
           new Projectile(nextProjectileId.getAndIncrement(), shooter.id(), muzzle, angle, w));
     }
 
     // Recoil: shove the shooter backwards, opposite the aim.
-    if (w.recoil > 0f) {
+    if (w.recoil() > 0f) {
       shooter.applyKnockback(
-          Vec2.of(-(float) Math.cos(base), -(float) Math.sin(base)).scale(w.recoil));
+          Vec2.of(-(float) Math.cos(base), -(float) Math.sin(base)).scale(w.recoil()));
     }
   }
 

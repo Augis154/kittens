@@ -59,7 +59,7 @@ final class ServerPlayer extends Actor {
 
   private void refillAllMagazines() {
     for (int i = 0; i < magAmmo.length; i++) {
-      magAmmo[i] = Weapon.byId(i).magazineSize;
+      magAmmo[i] = Weapon.byId(i).magazineSize();
     }
   }
 
@@ -95,7 +95,7 @@ final class ServerPlayer extends Actor {
       reloadTimer -= dt;
       if (reloadTimer <= 0) {
         reloadTimer = 0;
-        magAmmo[weapon.id()] = weapon.magazineSize;
+        magAmmo[weapon.id()] = weapon.magazineSize();
       }
     }
 
@@ -137,13 +137,13 @@ final class ServerPlayer extends Actor {
     if (firing && fireCooldown <= 0 && reloadTimer <= 0) {
       if (magAmmo[weapon.id()] > 0) {
         fireRequested = true;
-        fireCooldown = weapon.fireInterval;
+        fireCooldown = weapon.fireInterval();
         magAmmo[weapon.id()]--;
         if (magAmmo[weapon.id()] == 0) {
-          reloadTimer = weapon.reloadTime; // auto-reload once the magazine runs dry
+          reloadTimer = weapon.reloadTime(); // auto-reload once the magazine runs dry
         }
       } else {
-        reloadTimer = weapon.reloadTime;
+        reloadTimer = weapon.reloadTime();
       }
     }
   }
@@ -157,10 +157,10 @@ final class ServerPlayer extends Actor {
    * magazine is full, so spamming the key can't cancel and restart the timer.
    */
   private void requestReload() {
-    if (reloadTimer > 0 || magAmmo[weapon.id()] >= weapon.magazineSize) {
+    if (reloadTimer > 0 || magAmmo[weapon.id()] >= weapon.magazineSize()) {
       return;
     }
-    reloadTimer = weapon.reloadTime;
+    reloadTimer = weapon.reloadTime();
   }
 
   /**
@@ -170,7 +170,7 @@ final class ServerPlayer extends Actor {
   float reloadProgress() {
     return reloadTimer <= 0
         ? 0f
-        : Math.max(1e-3f, (float) (1.0 - reloadTimer / weapon.reloadTime));
+        : Math.max(1e-3f, (float) (1.0 - reloadTimer / weapon.reloadTime()));
   }
 
   /** Shove this player by {@code force} (px/s); decays over the next few ticks. */
@@ -186,7 +186,7 @@ final class ServerPlayer extends Actor {
     reloadTimer = 0; // switching cancels an in-progress reload
     // Switching can't fire sooner than the new weapon allows, but also can't be gamed to skip an
     // already-shorter cooldown.
-    fireCooldown = Math.min(fireCooldown, next.fireInterval);
+    fireCooldown = Math.min(fireCooldown, next.fireInterval());
   }
 
   /** Returns whether the player wants to fire this tick, clearing the request. */

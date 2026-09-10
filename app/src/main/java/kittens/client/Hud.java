@@ -171,14 +171,14 @@ final class Hud {
       if (!active) {
         g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.55f));
       }
-      g.drawImage(assets.weapon(w.sprite), x + (SLOT_W - icon) / 2, top + 6, icon, icon, null);
+      g.drawImage(assets.weapon(w.sprite()), x + (SLOT_W - icon) / 2, top + 6, icon, icon, null);
       g.setComposite(baseComposite);
 
       g.setFont(Theme.FONT_SMALL);
       String hotkey = String.valueOf(w.id() + 1);
       Theme.shadowedText(g, hotkey, x + 7, top + 16, active ? Theme.ACCENT : Theme.TEXT_FAINT);
 
-      String name = w.displayName;
+      String name = w.displayName();
       int nameX = x + (SLOT_W - Theme.textWidth(g, Theme.FONT_SMALL, name)) / 2;
       Theme.shadowedText(g, name, nameX, top + h - 9, active ? Theme.TEXT : Theme.TEXT_DIM);
     }
@@ -187,7 +187,7 @@ final class Hud {
   // ---- ammo -----------------------------------------------------------------
 
   private void drawAmmo(Graphics2D g, int width, int height, View v) {
-    int mag = v.weapon().magazineSize;
+    int mag = v.weapon().magazineSize();
     int panelW = 176;
     int panelH = 62;
     int x = width - MARGIN - panelW;
@@ -255,7 +255,7 @@ final class Hud {
     boolean reloading = v.reload() > 0f;
     Color color = reloading ? Theme.WARN : v.ammo() == 0 ? Theme.DANGER : Theme.ACCENT;
 
-    float spreadPx = v.weapon().spread * 90f;
+    float spreadPx = v.weapon().spread() * 90f;
     int gap = Math.round(5 + spreadPx + v.recoilBloom() * 10f);
     int len = 7;
 

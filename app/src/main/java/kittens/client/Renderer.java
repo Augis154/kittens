@@ -325,7 +325,7 @@ final class Renderer {
     if (facingLeft) {
       g.scale(1, -1); // keep the gun upright when aiming left
     }
-    g.drawImage(assets.weapon(weapon.sprite), 4, -w / 2, w, w, null);
+    g.drawImage(assets.weapon(weapon.sprite()), 4, -w / 2, w, w, null);
     g.setTransform(saved);
     g.setComposite(baseComposite); // name tag and health bar stay solid
 
