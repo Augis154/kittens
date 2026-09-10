@@ -4,9 +4,11 @@ import java.util.Collection;
 import kittens.common.GameConfig;
 import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
+import kittens.common.sim.PathField;
 
 /**
- * Swarming enemy: fast, low health, scurries toward the player with dynamic weaving/jitter.
+ * Swarming enemy: fast, low health, scurries toward the player with dynamic weaving/jitter. Weaves
+ * around whichever direction it is currently pursuing, so the jitter follows it around corners too.
  */
 public class Mouse extends Enemy {
   private double weaveTime;
@@ -26,7 +28,7 @@ public class Mouse extends Enemy {
 
   @Override
   protected Vec2 computeMoveDirection(
-      TileMap map, Collection<? extends Actor> targets, double dt) {
+      TileMap map, PathField pursuit, Collection<? extends Actor> targets, double dt) {
     weaveTime += dt * 6.0;
 
     Actor closest = findClosestTarget(targets);
@@ -34,36 +36,14 @@ public class Mouse extends Enemy {
       return Vec2.ZERO;
     }
 
-    Vec2 diff = closest.pos().sub(pos);
-    float dist = diff.length();
-    if (dist < 1e-4f) {
+    Vec2 dir = steerToward(map, pursuit, closest.pos());
+    if (dir.lengthSq() < 1e-4f) {
       return Vec2.ZERO;
     }
-
-    Vec2 dir = diff.scale(1.0f / dist);
 
     // Add lateral sinusoidal weaving to give an erratic, scurrying feel
     Vec2 perp = Vec2.of(-dir.y, dir.x);
     float weaveOffset = (float) Math.sin(weaveTime) * 0.45f;
     return dir.add(perp.scale(weaveOffset)).normalized();
-  }
-
-  protected Actor findClosestTarget(Collection<? extends Actor> targets) {
-    if (targets == null || targets.isEmpty()) {
-      return null;
-    }
-    Actor closest = null;
-    float bestDistSq = Float.MAX_VALUE;
-    for (Actor target : targets) {
-      if (target.isDead()) {
-        continue;
-      }
-      float distSq = pos.sub(target.pos()).lengthSq();
-      if (distSq < bestDistSq) {
-        bestDistSq = distSq;
-        closest = target;
-      }
-    }
-    return closest;
   }
 }

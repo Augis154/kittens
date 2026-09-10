@@ -6,13 +6,15 @@ import kittens.common.map.TileMap;
 import kittens.common.math.Aabb;
 import kittens.common.math.Vec2;
 import kittens.common.net.EntityState;
+import kittens.common.sim.PathField;
 
 /**
  * Abstract computer-controlled enemy base class extending {@link Actor}.
  *
  * <p>The movement decision is encapsulated in the virtual method {@link
- * #computeMoveDirection(TileMap, Collection, double)}, which serves as the seam where specialized
- * AI behaviors and strategy patterns can be attached.
+ * #computeMoveDirection(TileMap, PathField, Collection, double)}, which serves as the seam where
+ * specialized AI behaviors and strategy patterns can be attached. Subclasses pick a target with
+ * {@link #findClosestTarget} and turn it into a direction with {@link #steerToward}.
  *
  * <p>Enemies collide with walls and players (stopping/sliding against them without pushing players),
  * but pass through other enemies.
@@ -68,6 +70,7 @@ public abstract class Enemy extends Actor {
   public void tick(
       double dt,
       TileMap map,
+      PathField pursuit,
       Collection<? extends Actor> targets,
       Collection<? extends Enemy> enemies) {
     if (isDead()) {
@@ -78,7 +81,7 @@ public abstract class Enemy extends Actor {
     knockback = knockback.scale((float) Math.max(0, 1.0 - dt * GameConfig.KNOCKBACK_DECAY));
 
     // Compute desired move direction toward target(s).
-    Vec2 desiredDir = computeMoveDirection(map, targets, dt);
+    Vec2 desiredDir = computeMoveDirection(map, pursuit, targets, dt);
 
     float dirLen = desiredDir.length();
     if (dirLen > 1e-4f) {
@@ -182,7 +185,70 @@ public abstract class Enemy extends Actor {
 
   /** The AI seam: compute the desired normalized movement direction vector for this enemy. */
   protected abstract Vec2 computeMoveDirection(
-      TileMap map, Collection<? extends Actor> targets, double dt);
+      TileMap map, PathField pursuit, Collection<? extends Actor> targets, double dt);
+
+  /** The nearest living target by straight-line distance, or {@code null} if there is none. */
+  protected Actor findClosestTarget(Collection<? extends Actor> targets) {
+    if (targets == null || targets.isEmpty()) {
+      return null;
+    }
+    Actor closest = null;
+    float bestDistSq = Float.MAX_VALUE;
+    for (Actor target : targets) {
+      if (target.isDead()) {
+        continue;
+      }
+      float distSq = pos.sub(target.pos()).lengthSq();
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq;
+        closest = target;
+      }
+    }
+    return closest;
+  }
+
+  /**
+   * The direction to chase {@code targetPos}: straight at it whenever this enemy's body has a clear
+   * run, and otherwise {@code pursuit}'s route around whatever is in the way. Falls back to the
+   * straight line when the field offers no route, so a cornered enemy still presses forward rather
+   * than freezing.
+   *
+   * <p>Preferring the direct line keeps movement smooth in the open — the field only takes over once
+   * a wall is actually between the two, which is exactly when tile-by-tile routing looks right.
+   */
+  protected Vec2 steerToward(TileMap map, PathField pursuit, Vec2 targetPos) {
+    Vec2 direct = targetPos.sub(pos);
+    if (direct.lengthSq() < 1e-4f) {
+      return Vec2.ZERO;
+    }
+    if (hasClearPath(map, targetPos)) {
+      return direct.normalized();
+    }
+    Vec2 routed = pursuit == null ? Vec2.ZERO : pursuit.directionAt(pos);
+    return routed.lengthSq() > 1e-4f ? routed : direct.normalized();
+  }
+
+  /**
+   * Whether this enemy's body can travel straight from here to {@code targetPos} without touching a
+   * wall. Sampled every half tile, which is fine enough to catch the corners an enemy would
+   * otherwise grind against, and it tests the enemy's own {@link #size} — so a rat needs a wider gap
+   * than a mouse to commit to a charge.
+   */
+  protected boolean hasClearPath(TileMap map, Vec2 targetPos) {
+    Vec2 delta = targetPos.sub(pos);
+    float distance = delta.length();
+    if (distance < 1e-4f) {
+      return true;
+    }
+    int samples = Math.max(1, (int) Math.ceil(distance / (map.tileSize() * 0.5f)));
+    for (int i = 1; i <= samples; i++) {
+      Vec2 at = pos.add(delta.scale((float) i / samples));
+      if (map.overlapsWall(Aabb.fromCenter(at, size))) {
+        return false;
+      }
+    }
+    return true;
+  }
 
   public EntityState toEntityState() {
     return new EntityState(id, kind, pos.x, pos.y, (float) facing, (float) health, -1);

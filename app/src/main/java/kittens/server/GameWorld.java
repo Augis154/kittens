@@ -14,6 +14,7 @@ import kittens.common.math.Vec2;
 import kittens.common.net.EntityState;
 import kittens.common.net.InputCommand;
 import kittens.common.net.Snapshot;
+import kittens.common.sim.PathField;
 import kittens.common.weapon.Weapon;
 
 /**
@@ -76,9 +77,12 @@ final class GameWorld {
       enemies.put(enemy.id(), enemy);
     }
 
-    // 4. Update computer-controlled enemies
-    for (Enemy enemy : enemies.values()) {
-      enemy.tick(dt, map, players.values(), enemies.values());
+    // 4. Update computer-controlled enemies, routed around walls by one shared path field
+    if (!enemies.isEmpty()) {
+      PathField pursuit = PathField.toward(map, huntedPositions());
+      for (Enemy enemy : enemies.values()) {
+        enemy.tick(dt, map, pursuit, players.values(), enemies.values());
+      }
     }
 
     // 5. Update projectiles and check collisions with map, players, and enemies
@@ -100,6 +104,21 @@ final class GameWorld {
     projectiles.removeIf(pr -> !pr.alive());
     enemies.values().removeIf(Enemy::isDead);
     explosions.removeIf(ex -> !ex.alive());
+  }
+
+  /**
+   * The positions enemies are hunting — every living player. Rebuilt each tick: one breadth-first
+   * pass over a few hundred tiles is far cheaper than caching it correctly, and it means the routes
+   * are never a tick stale.
+   */
+  private List<Vec2> huntedPositions() {
+    List<Vec2> goals = new ArrayList<>(players.size());
+    for (ServerPlayer p : players.values()) {
+      if (!p.dead()) {
+        goals.add(p.pos());
+      }
+    }
+    return goals;
   }
 
   /** Area-of-effect blast: full damage at the centre, easing to a quarter at the rim. */

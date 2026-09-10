@@ -4,9 +4,11 @@ import java.util.Collection;
 import kittens.common.GameConfig;
 import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
+import kittens.common.sim.PathField;
 
 /**
- * Standard chasing enemy: medium health, medium speed, steady pursuit of the closest kitten.
+ * Standard chasing enemy: medium health, medium speed, steady pursuit of the closest kitten —
+ * charging straight in when it can see one, and following the path field around cover when it can't.
  */
 public class Rat extends Enemy {
   public Rat(int id, Vec2 pos) {
@@ -23,35 +25,11 @@ public class Rat extends Enemy {
 
   @Override
   protected Vec2 computeMoveDirection(
-      TileMap map, Collection<? extends Actor> targets, double dt) {
+      TileMap map, PathField pursuit, Collection<? extends Actor> targets, double dt) {
     Actor closest = findClosestTarget(targets);
     if (closest == null) {
       return Vec2.ZERO;
     }
-
-    Vec2 diff = closest.pos().sub(pos);
-    if (diff.lengthSq() < 1e-4f) {
-      return Vec2.ZERO;
-    }
-    return diff.normalized();
-  }
-
-  protected Actor findClosestTarget(Collection<? extends Actor> targets) {
-    if (targets == null || targets.isEmpty()) {
-      return null;
-    }
-    Actor closest = null;
-    float bestDistSq = Float.MAX_VALUE;
-    for (Actor target : targets) {
-      if (target.isDead()) {
-        continue;
-      }
-      float distSq = pos.sub(target.pos()).lengthSq();
-      if (distSq < bestDistSq) {
-        bestDistSq = distSq;
-        closest = target;
-      }
-    }
-    return closest;
+    return steerToward(map, pursuit, closest.pos());
   }
 }

@@ -39,7 +39,7 @@ public final class GameConfig {
   public static final int EXPLOSION_ID_BASE = 2_000_000;
 
   /** Whether projectiles can hit other players. Flips off once enemies exist to shoot instead. */
-  public static final boolean FRIENDLY_FIRE = true;
+  public static final boolean FRIENDLY_FIRE = false;
 
   /** Rat enemy configuration. */
   public static final double RAT_MAX_HEALTH = 40.0;
