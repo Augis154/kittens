@@ -67,7 +67,7 @@ To verify simulation changes without a harness, compile a throwaway probe agains
 Note that `javac` is **not on PATH** — use the JDK Gradle provisioned:
 
 ```bash
-JDK=/home/augis/.gradle/jdks/eclipse_adoptium-21-amd64-linux.2/bin
+JDK=$HOME/.gradle/jdks/eclipse_adoptium-21-amd64-linux.2/bin
 $JDK/javac -cp app/build/classes/java/main -d /tmp/probe Probe.java
 $JDK/java -cp "app/build/classes/java/main:app/src/main/resources:/tmp/probe" Probe
 ```
@@ -82,6 +82,14 @@ later assertion silently reads a dead target; firing "into open space" on `arena
 firing into a wall a few tiles away; and enemies spawned already touching their target swing in
 lockstep, which flatters anything that rate-limits damage.
 
+To *see* the client instead of measuring it, don't try to screen-grab: under WSLg the X11 root
+window is black, so `ffmpeg -f x11grab` captures nothing. Render the panel offscreen instead — build
+a `Client` on the EDT, `setSize` it to its preferred size, and `paint()` it into a `BufferedImage`.
+No window ever has to be shown, and `dispatchEvent` with synthetic `MouseEvent`/`KeyEvent`s drives
+firing and movement so HUD states (reload, low health, downed) can be captured. Such a probe needs
+`package kittens.client` for `GameClient`, and Gson on the classpath — easiest via
+`./gradlew installDist` and `app/build/install/app/lib/*`.
+
 ## Architecture
 
 Three packages under `app/src/main/java/kittens/`, with a hard rule: **`common` contains no
@@ -92,7 +100,9 @@ rendering and no socket code.** It is the shared simulation both sides run.
   (`PlayerMotion`, `PathField`), `net/` (the DTOs), `GameConfig`.
 - **`server/`** — `Server` (socket accept), `ClientConnection`, `ServerLoop`, `GameWorld`,
   `ServerPlayer`, `Projectile`, `Explosion`, `SpawnDirector`.
-- **`client/`** — `GameClient` (networking), `Client` (input + all rendering), `AssetManager`.
+- **`client/`** — `GameClient` (networking), `Client` (window, input, prediction, frame loop),
+  `WorldView` (between-snapshot smoothing + cosmetic effects), `Renderer` (arena drawing),
+  `Hud` (screen-space overlay), `Theme` (palette, fonts, panel/text primitives), `AssetManager`.
 
 ### Authority and prediction
 
@@ -104,8 +114,12 @@ client**, because `ackSeq`, `viewerAmmo`, and `viewerReload` are all recipient-s
 `Client` renders at 180 FPS but sends input at exactly `TICK_HZ`. It predicts the local player by
 applying input immediately to its own copy of the movement model, then on each new snapshot
 re-anchors to the authoritative position and replays inputs the server hasn't acked, easing small
-errors and hard-snapping past a threshold. Remote players and enemies are exponentially smoothed;
-bullets are dead-reckoned from their angle and weapon speed.
+errors and hard-snapping past a threshold.
+
+Everything the local player does *not* control is smoothed by `WorldView` instead: remote players
+and enemies are eased exponentially toward their snapshot positions, and bullets are dead-reckoned
+from their angle and weapon speed. The split matters — prediction is reconciled against authority
+and lives in `Client`, while `WorldView` is cosmetic and can be retuned without desync risk.
 
 **The critical invariant:** `common/sim/PlayerMotion` is the *single* movement model, run by both
 `ServerPlayer.tick` and `Client`'s predictor with the same fixed `1.0 / TICK_HZ` step. It must stay
@@ -171,6 +185,15 @@ correctly at this map size and is never stale.
 
 ### Conventions
 
+- **Presentation goes through `client/Theme`, not literals.** Colours, fonts, and the panel/text
+  primitives live there; it is client-only and deliberately *not* in `GameConfig`, which is for
+  numbers both simulations must agree on. New drawing belongs in `Renderer` (world) or `Hud`
+  (overlay), and anything that has to move between snapshots belongs in `WorldView` — `Renderer` is
+  a pure function of a `Renderer.Scene` and owns no mutable state.
+- **Two coordinate spaces per frame.** `Client.paintComponent` draws the arena scaled by
+  `RENDER_SCALE`, then restores the transform and hands `Hud` the native window size, so HUD text
+  stays crisp. Anything screen-space (the crosshair, cursor-driven UI) needs the raw event pixels —
+  `Client` keeps both `mouseX/mouseY` (world, for aiming) and `screenMouseX/screenMouseY`.
 - **All gameplay tuning lives in `GameConfig`**, shared so client and server agree. Put new numbers
   there rather than inline, and keep the reasoning in the javadoc — several constants document
   measured trade-offs, not arbitrary picks.
@@ -189,8 +212,10 @@ Not bugs to fix on sight — context so you don't mistake them for accidents:
 - **`Weapon` is an enum with public final fields.** Elegant now, but a dead end for the Factory /
   Strategy / Decorator work the patterns requirement will need. Converting it is cheap today and
   expensive later.
-- **`Client` is a ~780-line god class** doing input, prediction, and all rendering. The design brief
-  calls for splitting it into `InputHandler` / `WorldView` / `Renderer` plus screen states.
+- **`Client` still owns input.** Rendering is out (`Renderer`, `Hud`, `WorldView`), leaving ~375
+  lines of window setup, key/mouse handling, prediction, and the frame loop. The design brief also
+  asks for an `InputHandler` and `Screen` states (`MainMenu` / `Lobby` / `InGame`); neither exists,
+  so there is no menu and no lobby — a client joins the match the moment it connects.
 - **No camera.** The window is a fixed, non-resizable render of the entire map scaled by
   `RENDER_SCALE`, which blocks any level larger than one screen.
 - **Wave state never reaches the client.** `SpawnDirector.currentWave()` and `isWaveInProgress()`

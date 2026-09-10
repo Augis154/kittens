@@ -1,15 +1,11 @@
 package kittens.client;
 
-import java.awt.AlphaComposite;
-import java.awt.BasicStroke;
-import java.awt.Color;
-import java.awt.Composite;
 import java.awt.Dimension;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.Point;
 import java.awt.RenderingHints;
-import java.awt.Shape;
-import java.awt.Stroke;
+import java.awt.Toolkit;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
@@ -37,23 +33,18 @@ import kittens.common.sim.PlayerMotion;
 import kittens.common.weapon.Weapon;
 
 /**
- * Rendering + input, with client-side prediction for the local player: input is applied to a local
- * copy of the movement model immediately (no round-trip felt), then each snapshot re-anchors that
- * prediction to the authoritative state and replays the inputs the server hasn't acknowledged yet.
- * Remote players, computer-controlled enemies, and projectiles are smoothly interpolated/extrapolated.
+ * The game window: input, client-side prediction for the local player, and the frame loop that
+ * drives {@link Renderer} and {@link Hud}.
+ *
+ * <p>Input is applied to a local copy of the movement model immediately (no round-trip felt), then
+ * each snapshot re-anchors that prediction to the authoritative state and replays the inputs the
+ * server hasn't acknowledged yet. Everything the local player does <em>not</em> control is smoothed
+ * by {@link WorldView} instead.
  */
 public final class Client extends JPanel {
-  private static final Color FLOOR = new Color(30, 30, 36);
-  private static final Color FLOOR_GRID = new Color(40, 40, 48);
-  private static final Color WALL = new Color(70, 74, 92);
-  private static final Color WALL_TOP = new Color(96, 100, 122);
-  private static final Color SPAWN_TILE = new Color(38, 52, 44);
-
   private static final int FPS = 180;
   private static final int INPUT_HZ = GameConfig.TICK_HZ;
   private static final double INPUT_DT = 1.0 / GameConfig.TICK_HZ;
-  /** Per-frame easing of remote entities toward their snapshot position. */
-  private static final float REMOTE_SMOOTHING = 0.30f;
   /** Correction easing when the local prediction is only slightly off. */
   private static final float RECONCILE_SMOOTHING = 0.25f;
   /** Prediction error (px) above which we hard-snap instead of easing. */
@@ -63,34 +54,22 @@ public final class Client extends JPanel {
   /** On-screen pixels per world pixel — enlarges the whole window. */
   private static final float RENDER_SCALE = 1.75f;
 
-  /**
-   * Below this much immunity left, the protected kitten flickers faster. A post-hit i-frame is
-   * shorter than this outright, so it reads as a single sharp flash, while the longer spawn grace
-   * starts slow and quickens as it runs out.
-   */
-  private static final float GRACE_RUSH_SECONDS = 0.6f;
-
-  /** Number of heart icons the local player's health is split across, on the HUD. */
-  private static final int HEART_COUNT = 5;
-  private static final int HEART_SIZE = 40;
-  private static final int HEART_GAP = 44;
+  /** How fast the crosshair's fired-recently bloom settles back down, per second. */
+  private static final float BLOOM_DECAY = 7f;
 
   private record Pending(long seq, float moveX, float moveY) {}
 
   private final TileMap map = TileMap.fromResource(GameConfig.MAP_RESOURCE, GameConfig.TILE);
   private final AssetManager assets = new AssetManager();
+  private final Renderer renderer = new Renderer(map, assets);
+  private final Hud hud = new Hud(assets);
+  private final WorldView view = new WorldView();
   private final GameClient client;
 
   // Local-player prediction.
   private Vec2 predicted;
   private final Deque<Pending> unacked = new ArrayDeque<>();
   private long lastSnapshotVersion = -1;
-
-  // Remote entities (players & enemies): interpolated on-screen position per id -> {x, y}.
-  private final Map<Integer, float[]> remotePos = new HashMap<>();
-
-  // Client-simulated projectiles: id -> {x, y, angle, vx, vy, weaponId} for smooth 60 FPS flight.
-  private final Map<Integer, float[]> clientBullets = new HashMap<>();
 
   // Input state (EDT only).
   private final Set<Integer> held = new HashSet<>();
@@ -102,16 +81,27 @@ public final class Client extends JPanel {
   private boolean firing;
   private Weapon selectedWeapon = Weapon.PISTOL;
   private long lastFrameNanos;
+  // Cursor in on-screen pixels (the crosshair is drawn unscaled, unlike the arena).
+  private int screenMouseX;
+  private int screenMouseY;
+  private float recoilBloom;
 
   public Client(GameClient client) {
     this.client = client;
     setPreferredSize(new Dimension(
         Math.round(map.pixelWidth() * RENDER_SCALE),
         Math.round(map.pixelHeight() * RENDER_SCALE)));
-    setBackground(FLOOR);
+    setBackground(Theme.FLOOR);
     setFocusable(true);
     mouseX = (int) map.pixelWidth() / 2;
     mouseY = (int) map.pixelHeight() / 2;
+    screenMouseX = Math.round(mouseX * RENDER_SCALE);
+    screenMouseY = Math.round(mouseY * RENDER_SCALE);
+    // The HUD draws its own crosshair; an arrow pointer on top of it would only be noise.
+    setCursor(
+        Toolkit.getDefaultToolkit()
+            .createCustomCursor(
+                new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB), new Point(0, 0), "blank"));
     installInput();
 
     new Timer(1000 / INPUT_HZ, e -> sendInputTick()).start();
@@ -197,8 +187,10 @@ public final class Client extends JPanel {
         });
   }
 
-  /** Cursor position in world (pre-scale) coordinates. */
+  /** Cursor position in world (pre-scale) coordinates, plus the raw pixels the HUD needs. */
   private void setMouseWorld(MouseEvent e) {
+    screenMouseX = e.getX();
+    screenMouseY = e.getY();
     mouseX = Math.round(e.getX() / RENDER_SCALE);
     mouseY = Math.round(e.getY() / RENDER_SCALE);
   }
@@ -241,6 +233,9 @@ public final class Client extends JPanel {
       unacked.clear();
       return;
     }
+    if (firing && client.viewerReload() <= 0f && client.viewerAmmo() > 0) {
+      recoilBloom = Math.min(1f, recoilBloom + 0.35f);
+    }
     InputCommand cmd =
         client.sendInput(moveX, moveY, aimAngle(), firing, selectedWeapon.id());
     unacked.addLast(new Pending(cmd.seq(), cmd.moveX(), cmd.moveY()));
@@ -263,13 +258,18 @@ public final class Client extends JPanel {
       predicted = PlayerMotion.step(map, predicted, moveX, moveY, GameConfig.PLAYER_SPEED, dt);
     }
 
-    interpolateRemotes();
-    updateBullets(dt);
+    view.update(dt, client.entities(), client.myPlayerId());
+    recoilBloom = Math.max(0f, recoilBloom - (float) (BLOOM_DECAY * dt));
   }
 
   private boolean localDead() {
     int me = client.myPlayerId();
     return me >= 0 && hpOf(me) <= 0f;
+  }
+
+  private float hpOf(int id) {
+    EntityState e = client.entities().get(id);
+    return e == null ? (float) GameConfig.PLAYER_MAX_HEALTH : e.hp();
   }
 
   /** On each new snapshot, re-anchor the prediction to authority + replay un-acked inputs. */
@@ -304,81 +304,10 @@ public final class Client extends JPanel {
           PlayerMotion.step(map, target, p.moveX(), p.moveY(), GameConfig.PLAYER_SPEED, INPUT_DT);
     }
 
-    if (predicted == null || mine.hp() <= 0f || predicted.distance(target) > RECONCILE_SNAP) {
-      predicted = target; // first snapshot, dead (frozen), or a desync worth snapping
+    if (predicted == null || predicted.distance(target) > RECONCILE_SNAP) {
+      predicted = target; // first snapshot or a desync worth snapping
     } else {
       predicted = predicted.add(target.sub(predicted).scale(RECONCILE_SMOOTHING));
-    }
-  }
-
-  private void interpolateRemotes() {
-    int me = client.myPlayerId();
-    Map<Integer, EntityState> live = client.entities();
-    remotePos.keySet().removeIf(id -> id == me || !live.containsKey(id));
-    for (EntityState e : live.values()) {
-      if (e.id() == me || "bullet".equals(e.kind()) || "boom".equals(e.kind())) {
-        continue; // bullets are dead-reckoned in updateBullets(), booms are drawn raw
-      }
-      float[] rp = remotePos.get(e.id());
-      if (rp == null) {
-        remotePos.put(e.id(), new float[] {e.x(), e.y()});
-      } else {
-        rp[0] += (e.x() - rp[0]) * REMOTE_SMOOTHING;
-        rp[1] += (e.y() - rp[1]) * REMOTE_SMOOTHING;
-      }
-    }
-  }
-
-  /** Advances bullets smoothly each client frame (60 FPS) and reconciles with server snapshots. */
-  private void updateBullets(double dt) {
-    Map<Integer, EntityState> live = client.entities();
-
-    // 1. Remove dead bullets no longer present in server snapshots
-    clientBullets.keySet().removeIf(id -> {
-      EntityState e = live.get(id);
-      return e == null || !"bullet".equals(e.kind());
-    });
-
-    // 2. Synchronize new/existing bullets with server snapshot authority
-    for (EntityState e : live.values()) {
-      if (!"bullet".equals(e.kind())) {
-        continue;
-      }
-      Weapon weapon = Weapon.byId(e.weaponId());
-      float speed = weapon.projectileSpeed;
-      float vx = (float) Math.cos(e.angle()) * speed;
-      float vy = (float) Math.sin(e.angle()) * speed;
-
-      float[] b = clientBullets.get(e.id());
-      if (b == null) {
-        // [x, y, angle, vx, vy, weaponId]
-        clientBullets.put(
-            e.id(), new float[] {e.x(), e.y(), e.angle(), vx, vy, e.weaponId()});
-      } else {
-        // Soft reconcile position toward authoritative server snapshot
-        float dx = e.x() - b[0];
-        float dy = e.y() - b[1];
-        float distSq = dx * dx + dy * dy;
-        if (distSq > 48f * 48f) {
-          b[0] = e.x();
-          b[1] = e.y();
-        } else {
-          b[0] += dx * 0.25f;
-          b[1] += dy * 0.25f;
-        }
-        b[2] = e.angle();
-        b[3] = vx;
-        b[4] = vy;
-        b[5] = e.weaponId();
-      }
-    }
-
-    // 3. Extrapolate position forward for this client frame
-    if (dt > 0) {
-      for (float[] b : clientBullets.values()) {
-        b[0] += b[3] * (float) dt;
-        b[1] += b[4] * (float) dt;
-      }
     }
   }
 
@@ -390,373 +319,41 @@ public final class Client extends JPanel {
     Graphics2D g2 = (Graphics2D) g;
     g2.setRenderingHint(
         RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
-    // Everything below is authored in world coordinates; scale the whole scene up to the window.
+    Theme.quality(g2);
+
+    // The arena is authored in world coordinates and magnified into the window; the HUD is drawn
+    // afterwards at native resolution, so its text and panels stay sharp instead of being scaled.
+    AffineTransform screen = g2.getTransform();
     g2.scale(RENDER_SCALE, RENDER_SCALE);
+    renderer.draw(g2, scene());
+    g2.setTransform(screen);
 
-    drawMap(g2);
-    drawEntities(g2);
-    drawHearts(g2);
-    drawHud(g2);
+    hud.draw(g2, getWidth(), getHeight(), hudView());
   }
 
-  private void drawMap(Graphics2D g) {
-    int t = GameConfig.TILE;
-    for (int row = 0; row < map.height(); row++) {
-      for (int col = 0; col < map.width(); col++) {
-        int px = col * t;
-        int py = row * t;
-        switch (map.tileAt(col, row)) {
-          case WALL -> {
-            g.setColor(WALL);
-            g.fillRect(px, py, t, t);
-            g.setColor(WALL_TOP);
-            g.fillRect(px, py, t, 4);
-          }
-          case SPAWN -> {
-            g.setColor(SPAWN_TILE);
-            g.fillRect(px, py, t, t);
-            g.setColor(FLOOR_GRID);
-            g.drawRect(px, py, t - 1, t - 1);
-          }
-          case FLOOR -> {
-            g.setColor(FLOOR_GRID);
-            g.drawRect(px, py, t - 1, t - 1);
-          }
-        }
-      }
-    }
+  private Renderer.Scene scene() {
+    return new Renderer.Scene(
+        client.entities(), client.myPlayerId(), view, predicted, aimAngle(), selectedWeapon);
   }
 
-  private void drawEntities(Graphics2D g) {
+  private Hud.View hudView() {
     int me = client.myPlayerId();
-
-    // 1. Bullets (smooth 60 FPS client prediction / extrapolation)
-    for (float[] b : clientBullets.values()) {
-      drawBullet(g, b[0], b[1], b[2], (int) b[5]);
-    }
-
-    // 2. Enemies
-    for (EntityState e : client.entities().values()) {
-      if ("rat".equals(e.kind()) || "mouse".equals(e.kind())) {
-        float[] pos = remotePos.get(e.id());
-        float x = pos != null ? pos[0] : e.x();
-        float y = pos != null ? pos[1] : e.y();
-        drawEnemy(g, e, x, y);
-      }
-    }
-
-    // 3. Remote Players
-    for (Map.Entry<Integer, float[]> entry : remotePos.entrySet()) {
-      int id = entry.getKey();
-      EntityState e = client.entities().get(id);
-      if (e != null && "cat".equals(e.kind())) {
-        drawKitten(
-            g,
-            id,
-            entry.getValue()[0],
-            entry.getValue()[1],
-            angleOf(id),
-            hpOf(id),
-            weaponOf(id),
-            false);
-      }
-    }
-
-    // 4. Local Player
-    if (predicted != null) {
-      drawKitten(g, me, predicted.x, predicted.y, aimAngle(), hpOf(me), selectedWeapon, true);
-    } else {
-      EntityState mine = me < 0 ? null : client.entities().get(me);
-      if (mine != null) {
-        drawKitten(
-            g,
-            me,
-            mine.x(),
-            mine.y(),
-            mine.angle(),
-            mine.hp(),
-            Weapon.byId(mine.weaponId()),
-            true);
-      }
-    }
-
-    // 5. Explosions (on top)
-    for (EntityState e : client.entities().values()) {
-      if ("boom".equals(e.kind())) {
-        drawBoom(g, e);
-      }
-    }
-  }
-
-  private void drawBoom(Graphics2D g, EntityState e) {
-    float r = e.angle();          // current expanding radius
-    float maxR = e.hp();          // final radius
-    float progress = maxR > 0f ? r / maxR : 1f;
-    int fade = Math.max(0, Math.round(150 * (1f - progress)));
-    int cx = Math.round(e.x());
-    int cy = Math.round(e.y());
-    int ir = Math.round(r);
-    g.setColor(new Color(255, 150, 60, Math.round(fade * 0.6f)));
-    g.fillOval(cx - ir, cy - ir, ir * 2, ir * 2);
-    Stroke saved = g.getStroke();
-    g.setStroke(new BasicStroke(3f));
-    g.setColor(new Color(255, 224, 150, fade));
-    g.drawOval(cx - ir, cy - ir, ir * 2, ir * 2);
-    g.setStroke(saved);
-  }
-
-  private float angleOf(int id) {
-    EntityState e = client.entities().get(id);
-    return e == null ? 0f : e.angle();
-  }
-
-  private float hpOf(int id) {
-    EntityState e = client.entities().get(id);
-    return e == null ? (float) GameConfig.PLAYER_MAX_HEALTH : e.hp();
-  }
-
-  /** Seconds of damage immunity the given player has left; 0 once they can be hurt again. */
-  private float invulnerableOf(int id) {
-    EntityState e = client.entities().get(id);
-    return e == null ? 0f : e.invulnerableFor();
-  }
-
-  private Weapon weaponOf(int id) {
-    EntityState e = client.entities().get(id);
-    return Weapon.byId(e == null ? 0 : e.weaponId());
-  }
-
-  private void drawBullet(Graphics2D g, float bx, float by, float angle, int weaponId) {
-    boolean rocket = weaponId == Weapon.BAZOOKA.id();
-    float tail = rocket ? 14f : 9f;
-    int tailX = Math.round(bx - (float) Math.cos(angle) * tail);
-    int tailY = Math.round(by - (float) Math.sin(angle) * tail);
-    Stroke saved = g.getStroke();
-    g.setColor(rocket ? new Color(255, 150, 70) : new Color(255, 224, 130));
-    g.setStroke(new BasicStroke(rocket ? 4f : 2f));
-    g.drawLine(tailX, tailY, Math.round(bx), Math.round(by));
-    int r = rocket ? 4 : 2;
-    g.fillOval(Math.round(bx) - r, Math.round(by) - r, r * 2, r * 2);
-    g.setStroke(saved);
-  }
-
-  private void drawEnemy(Graphics2D g, EntityState e, float cx, float cy) {
-    int t = GameConfig.TILE;
-    int x = Math.round(cx - t / 2f);
-    int y = Math.round(cy - t / 2f);
-    boolean facingLeft = Math.cos(e.angle()) < 0;
-
-    BufferedImage img = assets.enemy(e.kind());
-    if (img != null) {
-      if (facingLeft) {
-        g.drawImage(img, x + t, y, -t, t, null);
-      } else {
-        g.drawImage(img, x, y, t, t, null);
-      }
-    }
-
-    // Health bar above enemy
-    double maxHp =
-        "mouse".equals(e.kind()) ? GameConfig.MOUSE_MAX_HEALTH : GameConfig.RAT_MAX_HEALTH;
-    float frac = Math.clamp(e.hp() / (float) maxHp, 0f, 1f);
-    if (frac < 1f && frac > 0f) {
-      int bw = Math.round(t * 0.75f);
-      int bx = Math.round(cx - bw / 2f);
-      int by = y - 5;
-      g.setColor(new Color(0, 0, 0, 160));
-      g.fillRect(bx, by, bw, 3);
-      g.setColor(new Color(230, 70, 70));
-      g.fillRect(bx, by, Math.round(bw * frac), 3);
-    }
-  }
-
-  private void drawKitten(
-      Graphics2D g,
-      int id,
-      float cx,
-      float cy,
-      float angle,
-      float hp,
-      Weapon weapon,
-      boolean self) {
-    int t = GameConfig.TILE;
-    int x = Math.round(cx - t / 2f);
-    int y = Math.round(cy - t / 2f);
-    boolean facingLeft = Math.cos(angle) < 0;
-    boolean dead = hp <= 0f;
-
-    if (self && !dead) {
-      g.setColor(new Color(120, 210, 255, 90));
-      g.drawLine(Math.round(cx), Math.round(cy), mouseX, mouseY);
-      g.setColor(new Color(120, 210, 255));
-      g.drawOval(x - 2, y - 2, t + 3, t + 3);
-    }
-
-    if (dead) {
-      // Downed: a faint marker where the kitten will respawn from view soon.
-      g.setColor(new Color(180, 90, 90, 120));
-      g.drawLine(x + 4, y + 4, x + t - 4, y + t - 4);
-      g.drawLine(x + t - 4, y + 4, x + 4, y + t - 4);
-      g.setColor(new Color(255, 255, 255, 120));
-      g.drawString("P" + id, x, y - 4);
-      return;
-    }
-
-    // Immunity (spawn grace or a post-hit i-frame): pulse the kitten so its owner *and* their
-    // teammates can see who is protected, quickening as it runs out rather than just stopping.
-    float grace = invulnerableOf(id);
-    Composite baseComposite = g.getComposite();
-    if (grace > 0f) {
-      double rate = grace < GRACE_RUSH_SECONDS ? 22.0 : 9.0;
-      float pulse = (float) (0.5 + 0.5 * Math.sin(System.nanoTime() / 1e9 * rate));
-      g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.35f + 0.5f * pulse));
-    }
-
-    // Kitten, flipped horizontally to face the aim direction.
-    BufferedImage kitten = assets.kitten(GameConfig.kittenSprite(id));
-    if (facingLeft) {
-      g.drawImage(kitten, x + t, y, -t, t, null);
-    } else {
-      g.drawImage(kitten, x, y, t, t, null);
-    }
-
-    // Weapon, rotated around the player toward the aim angle.
-    int w = 22;
-    AffineTransform saved = g.getTransform();
-    g.translate(cx, cy);
-    g.rotate(angle);
-    if (facingLeft) {
-      g.scale(1, -1); // keep the gun upright when aiming left
-    }
-    g.drawImage(assets.weapon(weapon.sprite), 4, -w / 2, w, w, null);
-    g.setTransform(saved);
-    g.setComposite(baseComposite); // name tag and health bar stay solid
-
-    // Health bar above the kitten — for other players only; the local player uses the heart HUD.
-    if (!self) {
-      float frac = Math.clamp(hp / (float) GameConfig.PLAYER_MAX_HEALTH, 0f, 1f);
-      if (frac < 1f) {
-        int bw = t;
-        int by = y - 8;
-        g.setColor(new Color(0, 0, 0, 140));
-        g.fillRect(x, by, bw, 3);
-        g.setColor(frac > 0.4f ? new Color(120, 210, 120) : new Color(220, 110, 90));
-        g.fillRect(x, by, Math.round(bw * frac), 3);
-      }
-    }
-
-    g.setColor(Color.WHITE);
-    g.drawString("P" + id, x, y - 12);
-  }
-
-  /** The local player's health as a row of heart icons in the top-left corner. */
-  private void drawHearts(Graphics2D g) {
-    int me = client.myPlayerId();
-    if (me < 0) {
-      return;
-    }
-    float hp = hpOf(me);
-    float perHeart = (float) GameConfig.PLAYER_MAX_HEALTH / HEART_COUNT;
-    int size = HEART_SIZE;
-    int gap = HEART_GAP;
-    int x0 = 14;
-    int y0 = 12;
-
-    g.setColor(new Color(0, 0, 0, 80));
-    g.fillRoundRect(x0 - 8, y0 - 6, (HEART_COUNT - 1) * gap + size + 16, size + 12, 14, 14);
-
-    BufferedImage heart = assets.image("utils/heart.png");
-    Composite baseComposite = g.getComposite();
-    Shape baseClip = g.getClip();
-    for (int i = 0; i < HEART_COUNT; i++) {
-      int hx = x0 + i * gap;
-      float frac = Math.clamp((hp - i * perHeart) / perHeart, 0f, 1f);
-
-      // Empty slot: a faint heart.
-      g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.18f));
-      g.drawImage(heart, hx, y0, size, size, null);
-      g.setComposite(baseComposite);
-
-      // Filled portion: full heart, clipped horizontally to the fraction remaining.
-      if (frac > 0f) {
-        g.setClip(hx, y0, Math.max(1, Math.round(size * frac)), size);
-        g.drawImage(heart, hx, y0, size, size, null);
-        g.setClip(baseClip);
-      }
-    }
-  }
-
-  private void drawHud(Graphics2D g) {
-    int me = client.myPlayerId();
-    int baseY = (int) map.pixelHeight() - 10;
-
-    long enemyCount =
+    long enemies =
         client.entities().values().stream()
             .filter(e -> "rat".equals(e.kind()) || "mouse".equals(e.kind()))
             .count();
-    g.setColor(new Color(255, 255, 255, 150));
-    String who = me < 0 ? "connecting…" : "P" + me;
-    g.drawString(
-        who
-            + "  ·  enemies: "
-            + enemyCount
-            + "  ·  WASD move · mouse aim · click fire · 1-4 weapon",
-        8,
-        baseY - 18);
-
-    // Weapon selector.
-    int x = 8;
-    for (Weapon wpn : Weapon.values()) {
-      boolean active = wpn == selectedWeapon;
-      String label = (wpn.id() + 1) + " " + wpn.displayName;
-      int wpx = g.getFontMetrics().stringWidth(label) + 12;
-      if (active) {
-        g.setColor(new Color(120, 210, 255, 60));
-        g.fillRect(x, baseY - 12, wpx, 16);
-      }
-      g.setColor(active ? Color.WHITE : new Color(255, 255, 255, 110));
-      g.drawString(label, x + 6, baseY);
-      x += wpx + 4;
-    }
-
-    drawAmmo(g);
-  }
-
-  /** Ammo readout / reload bar in the bottom-right corner. */
-  private void drawAmmo(Graphics2D g) {
-    if (client.myPlayerId() < 0) {
-      return;
-    }
-    int right = (int) map.pixelWidth() - 12;
-    int baseY = (int) map.pixelHeight() - 14;
-    float reload = client.viewerReload();
-    int mag = selectedWeapon.magazineSize;
-
-    if (reload > 0f) {
-      String txt = "RELOADING";
-      int tw = g.getFontMetrics().stringWidth(txt);
-      int barW = 96;
-      int panelW = Math.max(tw, barW) + 16;
-      g.setColor(new Color(0, 0, 0, 90));
-      g.fillRoundRect(right - panelW, baseY - 26, panelW, 34, 10, 10);
-      g.setColor(new Color(255, 210, 120));
-      g.drawString(txt, right - panelW + 8, baseY - 12);
-      g.setColor(new Color(255, 255, 255, 50));
-      g.fillRect(right - panelW + 8, baseY - 6, barW, 5);
-      g.setColor(new Color(255, 210, 120));
-      g.fillRect(right - panelW + 8, baseY - 6, Math.round(barW * Math.clamp(reload, 0f, 1f)), 5);
-    } else {
-      // Clamp for display: the server's weapon can lag a fresh number-key press by a tick.
-      int ammo = Math.clamp(client.viewerAmmo(), 0, mag);
-      String txt = ammo + " / " + mag;
-      int tw = g.getFontMetrics().stringWidth(txt);
-      int panelW = tw + 20;
-      g.setColor(new Color(0, 0, 0, 90));
-      g.fillRoundRect(right - panelW, baseY - 22, panelW, 30, 10, 10);
-      g.setColor(ammo == 0 ? new Color(230, 110, 90)
-          : ammo <= Math.max(1, mag / 4) ? new Color(240, 200, 110) : Color.WHITE);
-      g.drawString(txt, right - panelW + 10, baseY - 3);
-    }
+    return new Hud.View(
+        me,
+        me < 0 ? (float) GameConfig.PLAYER_MAX_HEALTH : hpOf(me),
+        selectedWeapon,
+        client.viewerAmmo(),
+        client.viewerReload(),
+        (int) enemies,
+        me >= 0,
+        localDead(),
+        screenMouseX,
+        screenMouseY,
+        recoilBloom);
   }
 
   public static void main(String[] args) throws IOException {
