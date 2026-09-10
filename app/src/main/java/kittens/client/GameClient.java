@@ -77,9 +77,10 @@ final class GameClient {
   }
 
   /** Send the current intent and return the command (its {@code seq} is needed for replay). */
-  InputCommand sendInput(float moveX, float moveY, float aimAngle, boolean firing, int weaponId) {
+  InputCommand sendInput(
+      float moveX, float moveY, float aimAngle, boolean firing, int weaponId, boolean reload) {
     InputCommand cmd = new InputCommand(
-        moveX, moveY, aimAngle, firing, weaponId, inputSeq.getAndIncrement());
+        moveX, moveY, aimAngle, firing, weaponId, reload, inputSeq.getAndIncrement());
     send(cmd);
     return cmd;
   }

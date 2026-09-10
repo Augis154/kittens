@@ -120,6 +120,9 @@ final class ServerPlayer extends Actor {
       facing = cmd.aimAngle();
       firing = cmd.firing();
       selectWeapon(Weapon.byId(cmd.weaponId()));
+      if (cmd.reload()) {
+        requestReload();
+      }
       pos = PlayerMotion.step(map, pos, cmd.moveX(), cmd.moveY(), GameConfig.PLAYER_SPEED, INPUT_DT);
     }
 
@@ -149,9 +152,25 @@ final class ServerPlayer extends Actor {
     return magAmmo[weapon.id()];
   }
 
-  /** 0 when ready to fire; otherwise reload progress in (0, 1]. */
+  /**
+   * Start a manual reload of the current weapon. Ignored while already reloading or when the
+   * magazine is full, so spamming the key can't cancel and restart the timer.
+   */
+  private void requestReload() {
+    if (reloadTimer > 0 || magAmmo[weapon.id()] >= weapon.magazineSize) {
+      return;
+    }
+    reloadTimer = weapon.reloadTime;
+  }
+
+  /**
+   * 0 when ready to fire; otherwise reload progress in (0, 1]. Clamped away from 0 so the tick a
+   * reload starts still reports as reloading — otherwise the HUD misses the first snapshot of it.
+   */
   float reloadProgress() {
-    return reloadTimer <= 0 ? 0f : (float) (1.0 - reloadTimer / weapon.reloadTime);
+    return reloadTimer <= 0
+        ? 0f
+        : Math.max(1e-3f, (float) (1.0 - reloadTimer / weapon.reloadTime));
   }
 
   /** Shove this player by {@code force} (px/s); decays over the next few ticks. */

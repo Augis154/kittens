@@ -236,7 +236,10 @@ final class Hud {
   private void drawControls(Graphics2D g, int height) {
     g.setFont(Theme.FONT_SMALL);
     Theme.shadowedText(
-        g, "WASD move · mouse aim · click fire · 1-4 weapon", MARGIN, height - MARGIN - 4,
+        g,
+        "WASD move · mouse aim · click fire · 1-4 weapon · R reload",
+        MARGIN,
+        height - MARGIN - 4,
         Theme.TEXT_FAINT);
   }
 

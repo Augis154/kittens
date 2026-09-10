@@ -78,6 +78,7 @@ public final class Client extends JPanel {
   private float moveX;
   private float moveY;
   private boolean firing;
+  private boolean reloadRequested;
   private Weapon selectedWeapon = Weapon.PISTOL;
   private long lastFrameNanos;
   // Cursor in on-screen pixels (the crosshair is drawn unscaled, unlike the arena).
@@ -119,6 +120,11 @@ public final class Client extends JPanel {
             int code = e.getKeyCode();
             if (code >= KeyEvent.VK_1 && code < KeyEvent.VK_1 + Weapon.count()) {
               selectedWeapon = Weapon.byId(code - KeyEvent.VK_1);
+              return;
+            }
+            if (code == KeyEvent.VK_R) {
+              // Latched, not held: the request rides the next input tick and is then cleared.
+              reloadRequested = true;
               return;
             }
             Timer grace = pendingRelease.remove(code);
@@ -225,7 +231,8 @@ public final class Client extends JPanel {
     }
     // A downed player can still aim, but sends no movement and records nothing to replay.
     if (localDead()) {
-      client.sendInput(0f, 0f, aimAngle(), false, selectedWeapon.id());
+      client.sendInput(0f, 0f, aimAngle(), false, selectedWeapon.id(), false);
+      reloadRequested = false;
       unacked.clear();
       return;
     }
@@ -233,7 +240,8 @@ public final class Client extends JPanel {
       recoilBloom = Math.min(1f, recoilBloom + 0.35f);
     }
     InputCommand cmd =
-        client.sendInput(moveX, moveY, aimAngle(), firing, selectedWeapon.id());
+        client.sendInput(moveX, moveY, aimAngle(), firing, selectedWeapon.id(), reloadRequested);
+    reloadRequested = false;
     unacked.addLast(new Pending(cmd.seq(), cmd.moveX(), cmd.moveY()));
     while (unacked.size() > 4 * INPUT_HZ) { // ~4s safety cap
       unacked.pollFirst();
