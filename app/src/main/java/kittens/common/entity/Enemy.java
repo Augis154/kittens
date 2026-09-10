@@ -20,6 +20,9 @@ import kittens.common.sim.PathField;
  * but pass through other enemies.
  */
 public abstract class Enemy extends Actor {
+  /** Radians between successive ids when fanning a stack apart; spreads without ever repeating. */
+  private static final double GOLDEN_ANGLE = 2.399963229728653;
+
   protected final String kind;
   protected final float speed;
   protected final double attackDamage;
@@ -81,12 +84,22 @@ public abstract class Enemy extends Actor {
     knockback = knockback.scale((float) Math.max(0, 1.0 - dt * GameConfig.KNOCKBACK_DECAY));
 
     // Compute desired move direction toward target(s).
-    Vec2 desiredDir = computeMoveDirection(map, pursuit, targets, dt);
+    Vec2 chase = computeMoveDirection(map, pursuit, targets, dt);
+
+    // Face the quarry rather than the resultant, so a crowded enemy still looks at what it is
+    // chasing instead of turning to face whoever is shoving it.
+    if (chase.lengthSq() > 1e-8f) {
+      facing = (float) Math.atan2(chase.y, chase.x);
+    }
+
+    // Blend in a push out of the neighbours' personal space, so a wave spreads into a swarm that
+    // surrounds its target instead of collapsing into a single stacked point.
+    Vec2 desiredDir =
+        chase.add(separationFrom(enemies).scale(GameConfig.ENEMY_SEPARATION_WEIGHT));
 
     float dirLen = desiredDir.length();
     if (dirLen > 1e-4f) {
       desiredDir = desiredDir.scale(1.0f / dirLen);
-      facing = (float) Math.atan2(desiredDir.y, desiredDir.x);
     }
 
     // Combine desired movement with residual knockback.
@@ -187,6 +200,58 @@ public abstract class Enemy extends Actor {
   protected abstract Vec2 computeMoveDirection(
       TileMap map, PathField pursuit, Collection<? extends Actor> targets, double dt);
 
+  /**
+   * A push away from the enemies crowding this one, or {@link Vec2#ZERO} when it has room. Each
+   * neighbour inside the two bodies' personal space contributes a nudge that strengthens steeply the
+   * deeper they overlap, and the total keeps its magnitude (capped at
+   * {@link GameConfig#ENEMY_SEPARATION_MAX}) rather than being normalised — a dozen overlapping
+   * neighbours have to push harder than one that is barely touching.
+   *
+   * <p>This only shapes movement <em>intent</em> — enemies still pass through each other, so a
+   * corridor can never gridlock. Because the push falls to nothing as soon as they are apart, a
+   * swarm with nothing to chase settles instead of drifting forever.
+   */
+  protected Vec2 separationFrom(Collection<? extends Enemy> others) {
+    if (others == null) {
+      return Vec2.ZERO;
+    }
+    Vec2 push = Vec2.ZERO;
+    for (Enemy other : others) {
+      if (other == this || other.isDead()) {
+        continue;
+      }
+      float range =
+          (size.x + other.size.x) * 0.5f * GameConfig.ENEMY_SEPARATION_SLACK;
+      Vec2 diff = pos.sub(other.pos());
+      float distance = diff.length();
+      if (distance >= range) {
+        continue;
+      }
+      if (distance < range * 0.05f) {
+        // Practically on top of each other — the direction "away" is meaningless here, and in a
+        // symmetric pile every push would cancel against its opposite. Fan the stack out along the
+        // golden angle by id instead: deterministic, since the server is authoritative, and
+        // successive ids never pick the same way.
+        double angle = id * GOLDEN_ANGLE;
+        push =
+            push.add(
+                Vec2.of((float) Math.cos(angle), (float) Math.sin(angle))
+                    .scale(GameConfig.ENEMY_SEPARATION_MAX));
+        continue;
+      }
+      // Inverse falloff rather than linear: nothing at arm's length, but rising steeply as they
+      // overlap, so a pile out-pulls its own chase and the faintest asymmetry is enough to split it.
+      push = push.add(diff.scale((range / distance - 1f) / distance));
+    }
+    // Keep the crowding magnitude — normalising it here would make eleven overlapping neighbours
+    // push no harder than one that is barely touching.
+    float length = push.length();
+    if (length > GameConfig.ENEMY_SEPARATION_MAX) {
+      push = push.scale(GameConfig.ENEMY_SEPARATION_MAX / length);
+    }
+    return push;
+  }
+
   /** The nearest living target by straight-line distance, or {@code null} if there is none. */
   protected Actor findClosestTarget(Collection<? extends Actor> targets) {
     if (targets == null || targets.isEmpty()) {
@@ -251,6 +316,6 @@ public abstract class Enemy extends Actor {
   }
 
   public EntityState toEntityState() {
-    return new EntityState(id, kind, pos.x, pos.y, (float) facing, (float) health, -1);
+    return new EntityState(id, kind, pos.x, pos.y, (float) facing, (float) health, -1, 0f);
   }
 }

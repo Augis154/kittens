@@ -30,6 +30,11 @@ final class ServerPlayer extends Actor {
   private Weapon weapon = Weapon.PISTOL;
   private double fireCooldown;
   private double respawnTimer;
+  /**
+   * Seconds of damage immunity left; while this is running the player cannot be hurt. Covers both
+   * the grace for arriving at a spawn point and the brief i-frame granted by every hit taken.
+   */
+  private double invulnerableTimer;
   private long lastProcessedSeq = -1;
   private Vec2 knockback = Vec2.ZERO;
 
@@ -48,6 +53,8 @@ final class ServerPlayer extends Actor {
         GameConfig.PLAYER_MAX_HEALTH);
     this.spawn = spawn;
     refillAllMagazines();
+    // A player joining mid-wave is arriving at a spawn point too, so they get the same grace.
+    invulnerableTimer = GameConfig.RESPAWN_INVULNERABILITY;
   }
 
   private void refillAllMagazines() {
@@ -68,6 +75,11 @@ final class ServerPlayer extends Actor {
     return isDead();
   }
 
+  /** Whether an active immunity window (spawn grace or post-hit i-frame) is blocking damage. */
+  boolean invulnerable() {
+    return invulnerableTimer > 0;
+  }
+
   long lastProcessedSeq() {
     return lastProcessedSeq;
   }
@@ -78,6 +90,7 @@ final class ServerPlayer extends Actor {
 
   void tick(double dt, TileMap map) {
     fireCooldown = Math.max(0, fireCooldown - dt);
+    invulnerableTimer = Math.max(0, invulnerableTimer - dt);
     if (reloadTimer > 0) {
       reloadTimer -= dt;
       if (reloadTimer <= 0) {
@@ -166,13 +179,17 @@ final class ServerPlayer extends Actor {
 
   @Override
   public void damage(double amount) {
-    if (dead() || amount <= 0) {
+    if (dead() || invulnerable() || amount <= 0) {
       return;
     }
     super.damage(amount);
     if (dead()) {
       firing = false;
       respawnTimer = GameConfig.RESPAWN_DELAY;
+    } else {
+      // Surviving a hit buys a short i-frame, so a ring of enemies cannot all land on one tick.
+      // Never shortens an immunity already running.
+      invulnerableTimer = Math.max(invulnerableTimer, GameConfig.HIT_INVULNERABILITY);
     }
   }
 
@@ -182,9 +199,18 @@ final class ServerPlayer extends Actor {
     alive = true;
     reloadTimer = 0;
     refillAllMagazines();
+    invulnerableTimer = GameConfig.RESPAWN_INVULNERABILITY;
   }
 
   EntityState toEntityState() {
-    return new EntityState(id, "cat", pos.x, pos.y, (float) facing, (float) health, weapon.id());
+    return new EntityState(
+        id,
+        "cat",
+        pos.x,
+        pos.y,
+        (float) facing,
+        (float) health,
+        weapon.id(),
+        (float) invulnerableTimer);
   }
 }

@@ -63,6 +63,13 @@ public final class Client extends JPanel {
   /** On-screen pixels per world pixel — enlarges the whole window. */
   private static final float RENDER_SCALE = 1.75f;
 
+  /**
+   * Below this much immunity left, the protected kitten flickers faster. A post-hit i-frame is
+   * shorter than this outright, so it reads as a single sharp flash, while the longer spawn grace
+   * starts slow and quickens as it runs out.
+   */
+  private static final float GRACE_RUSH_SECONDS = 0.6f;
+
   /** Number of heart icons the local player's health is split across, on the HUD. */
   private static final int HEART_COUNT = 5;
   private static final int HEART_SIZE = 40;
@@ -508,6 +515,12 @@ public final class Client extends JPanel {
     return e == null ? (float) GameConfig.PLAYER_MAX_HEALTH : e.hp();
   }
 
+  /** Seconds of damage immunity the given player has left; 0 once they can be hurt again. */
+  private float invulnerableOf(int id) {
+    EntityState e = client.entities().get(id);
+    return e == null ? 0f : e.invulnerableFor();
+  }
+
   private Weapon weaponOf(int id) {
     EntityState e = client.entities().get(id);
     return Weapon.byId(e == null ? 0 : e.weaponId());
@@ -589,6 +602,16 @@ public final class Client extends JPanel {
       return;
     }
 
+    // Immunity (spawn grace or a post-hit i-frame): pulse the kitten so its owner *and* their
+    // teammates can see who is protected, quickening as it runs out rather than just stopping.
+    float grace = invulnerableOf(id);
+    Composite baseComposite = g.getComposite();
+    if (grace > 0f) {
+      double rate = grace < GRACE_RUSH_SECONDS ? 22.0 : 9.0;
+      float pulse = (float) (0.5 + 0.5 * Math.sin(System.nanoTime() / 1e9 * rate));
+      g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.35f + 0.5f * pulse));
+    }
+
     // Kitten, flipped horizontally to face the aim direction.
     BufferedImage kitten = assets.kitten(GameConfig.kittenSprite(id));
     if (facingLeft) {
@@ -607,6 +630,7 @@ public final class Client extends JPanel {
     }
     g.drawImage(assets.weapon(weapon.sprite), 4, -w / 2, w, w, null);
     g.setTransform(saved);
+    g.setComposite(baseComposite); // name tag and health bar stay solid
 
     // Health bar above the kitten — for other players only; the local player uses the heart HUD.
     if (!self) {

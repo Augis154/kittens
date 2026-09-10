@@ -33,6 +33,6 @@ final class Explosion {
   EntityState toEntityState() {
     float progress = (float) Math.clamp(1 - life / DURATION, 0.0, 1.0);
     float currentRadius = radius * (0.35f + 0.65f * progress);
-    return new EntityState(id, "boom", pos.x, pos.y, currentRadius, radius, -1);
+    return new EntityState(id, "boom", pos.x, pos.y, currentRadius, radius, -1, 0f);
   }
 }
