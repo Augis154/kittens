@@ -34,10 +34,18 @@ final class Renderer {
   private static final float GRACE_RUSH_SECONDS = 0.6f;
 
   /**
+   * The inclusive block of tiles worth drawing this frame. The level is larger than the window, so
+   * without this the map passes would redraw thousands of off-screen tiles every frame.
+   * {@link Camera#visibleTiles()} produces it; the bounds are already clamped to the map.
+   */
+  record Tiles(int minCol, int minRow, int maxCol, int maxRow) {}
+
+  /**
    * One frame's worth of world state.
    *
    * @param predicted local player's predicted position, or null before the first snapshot lands
    * @param aimAngle where the local player is pointing, from the cursor rather than the snapshot
+   * @param tiles the on-screen tile range; the only thing here derived from where the camera is
    */
   record Scene(
       Map<Integer, EntityState> entities,
@@ -45,7 +53,8 @@ final class Renderer {
       WorldView view,
       Vec2 predicted,
       float aimAngle,
-      Weapon localWeapon) {}
+      Weapon localWeapon,
+      Tiles tiles) {}
 
   private final TileMap map;
   private final AssetManager assets;
@@ -56,17 +65,17 @@ final class Renderer {
   }
 
   void draw(Graphics2D g, Scene scene) {
-    drawMap(g);
+    drawMap(g, scene.tiles());
     drawEntities(g, scene);
     drawEffects(g, scene.view());
   }
 
   // ---- map ------------------------------------------------------------------
 
-  private void drawMap(Graphics2D g) {
+  private void drawMap(Graphics2D g, Tiles tiles) {
     int t = GameConfig.TILE;
-    for (int row = 0; row < map.height(); row++) {
-      for (int col = 0; col < map.width(); col++) {
+    for (int row = tiles.minRow(); row <= tiles.maxRow(); row++) {
+      for (int col = tiles.minCol(); col <= tiles.maxCol(); col++) {
         int px = col * t;
         int py = row * t;
         switch (map.tileAt(col, row)) {
@@ -89,8 +98,8 @@ final class Renderer {
 
     // Walls in a second pass so their cast shadow lands on finished floor, never on a tile drawn
     // after them.
-    for (int row = 0; row < map.height(); row++) {
-      for (int col = 0; col < map.width(); col++) {
+    for (int row = tiles.minRow(); row <= tiles.maxRow(); row++) {
+      for (int col = tiles.minCol(); col <= tiles.maxCol(); col++) {
         if (map.tileAt(col, row) != Tile.WALL) {
           continue;
         }

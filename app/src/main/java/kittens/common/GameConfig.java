@@ -7,9 +7,13 @@ public final class GameConfig {
   public static final int PORT = 7000;
 
   /** The map every client loads for this prototype. */
-  public static final String MAP_ID = "arena";
+  public static final String MAP_ID = "sewers";
 
-  public static final String MAP_RESOURCE = "maps/arena.txt";
+  /**
+   * Larger than one screen, so the client scrolls a camera over it. {@code maps/arena.txt} is the
+   * original single-screen map, kept because it is exactly one viewport and so is handy for probes.
+   */
+  public static final String MAP_RESOURCE = "maps/sewers.txt";
 
   /** Pixel size of one map tile; also the size the kitten sprites are drawn at. */
   public static final int TILE = 32;

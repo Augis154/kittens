@@ -19,7 +19,17 @@ import kittens.common.math.Vec2;
  * difficulty with faster and varied enemy compositions.
  */
 public final class SpawnDirector {
-  private static final float MIN_SPAWN_DIST = 140f;
+  /**
+   * How far from every living player a spawn point has to be before a wave may use it. Sized so a
+   * wave never pops into existence in view: the client shows a 800x480 world-pixel viewport, whose
+   * half-diagonal is about 466px. The old value of 140px predates the map being larger than one
+   * screen, and on {@code sewers.txt} it failed to exclude the four spawn points in the starting
+   * room, so waves appeared a few tiles from the players and downed them on arrival.
+   *
+   * <p>{@link #selectSpawnPosition} falls back to the farthest point when nothing clears the bar,
+   * so a map smaller than this simply always spawns as far away as it can.
+   */
+  private static final float MIN_SPAWN_DIST = 520f;
   private static final int MAX_ACTIVE_ENEMIES = 24;
 
   private final AtomicInteger nextEnemyId = new AtomicInteger(GameConfig.ENEMY_ID_BASE);

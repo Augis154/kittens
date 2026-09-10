@@ -61,6 +61,7 @@ public final class Client extends JPanel {
 
   private final TileMap map = TileMap.fromResource(GameConfig.MAP_RESOURCE, GameConfig.TILE);
   private final AssetManager assets = new AssetManager();
+  private final Camera camera = new Camera(map, RENDER_SCALE);
   private final Renderer renderer = new Renderer(map, assets);
   private final Hud hud = new Hud(assets);
   private final WorldView view = new WorldView();
@@ -76,8 +77,6 @@ public final class Client extends JPanel {
   private final Map<Integer, Timer> pendingRelease = new HashMap<>();
   private float moveX;
   private float moveY;
-  private int mouseX;
-  private int mouseY;
   private boolean firing;
   private Weapon selectedWeapon = Weapon.PISTOL;
   private long lastFrameNanos;
@@ -88,15 +87,11 @@ public final class Client extends JPanel {
 
   public Client(GameClient client) {
     this.client = client;
-    setPreferredSize(new Dimension(
-        Math.round(map.pixelWidth() * RENDER_SCALE),
-        Math.round(map.pixelHeight() * RENDER_SCALE)));
+    setPreferredSize(new Dimension(camera.windowWidth(), camera.windowHeight()));
     setBackground(Theme.FLOOR);
     setFocusable(true);
-    mouseX = (int) map.pixelWidth() / 2;
-    mouseY = (int) map.pixelHeight() / 2;
-    screenMouseX = Math.round(mouseX * RENDER_SCALE);
-    screenMouseY = Math.round(mouseY * RENDER_SCALE);
+    screenMouseX = camera.windowWidth() / 2;
+    screenMouseY = camera.windowHeight() / 2;
     // The HUD draws its own crosshair; an arrow pointer on top of it would only be noise.
     setCursor(
         Toolkit.getDefaultToolkit()
@@ -159,12 +154,12 @@ public final class Client extends JPanel {
         new MouseMotionAdapter() {
           @Override
           public void mouseMoved(MouseEvent e) {
-            setMouseWorld(e);
+            trackCursor(e);
           }
 
           @Override
           public void mouseDragged(MouseEvent e) {
-            setMouseWorld(e);
+            trackCursor(e);
           }
         };
     addMouseMotionListener(mouse);
@@ -187,21 +182,22 @@ public final class Client extends JPanel {
         });
   }
 
-  /** Cursor position in world (pre-scale) coordinates, plus the raw pixels the HUD needs. */
-  private void setMouseWorld(MouseEvent e) {
+  /**
+   * Remembers the cursor in raw window pixels. That is the only form worth storing: the camera
+   * pans between mouse events, so a cached world position would go stale and drag the aim with it.
+   */
+  private void trackCursor(MouseEvent e) {
     screenMouseX = e.getX();
     screenMouseY = e.getY();
-    mouseX = Math.round(e.getX() / RENDER_SCALE);
-    mouseY = Math.round(e.getY() / RENDER_SCALE);
   }
 
-  /** Angle (radians, screen space) from the local player toward the cursor. */
+  /** Angle (radians) from the local player toward the cursor, both in world coordinates. */
   private float aimAngle() {
     Vec2 p = predicted;
     if (p == null) {
       return 0f;
     }
-    return (float) Math.atan2(mouseY - p.y, mouseX - p.x);
+    return (float) Math.atan2(camera.worldY(screenMouseY) - p.y, camera.worldX(screenMouseX) - p.x);
   }
 
   private boolean down(int... codes) {
@@ -259,7 +255,24 @@ public final class Client extends JPanel {
     }
 
     view.update(dt, client.entities(), client.myPlayerId());
+    camera.follow(cameraTarget(), dt);
     recoilBloom = Math.max(0f, recoilBloom - (float) (BLOOM_DECAY * dt));
+  }
+
+  /**
+   * What the camera keeps centred: the predicted local kitten, falling back to its authoritative
+   * position before prediction has started and to the middle of the map before either exists.
+   */
+  private Vec2 cameraTarget() {
+    if (predicted != null) {
+      return predicted;
+    }
+    int me = client.myPlayerId();
+    EntityState mine = me < 0 ? null : client.entities().get(me);
+    if (mine != null) {
+      return Vec2.of(mine.x(), mine.y());
+    }
+    return Vec2.of(map.pixelWidth() * 0.5f, map.pixelHeight() * 0.5f);
   }
 
   private boolean localDead() {
@@ -321,10 +334,11 @@ public final class Client extends JPanel {
         RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
     Theme.quality(g2);
 
-    // The arena is authored in world coordinates and magnified into the window; the HUD is drawn
-    // afterwards at native resolution, so its text and panels stay sharp instead of being scaled.
+    // The arena is authored in world coordinates and magnified into the window through the camera;
+    // the HUD is drawn afterwards at native resolution, so its text and panels stay sharp instead
+    // of being scaled.
     AffineTransform screen = g2.getTransform();
-    g2.scale(RENDER_SCALE, RENDER_SCALE);
+    camera.apply(g2);
     renderer.draw(g2, scene());
     g2.setTransform(screen);
 
@@ -333,7 +347,13 @@ public final class Client extends JPanel {
 
   private Renderer.Scene scene() {
     return new Renderer.Scene(
-        client.entities(), client.myPlayerId(), view, predicted, aimAngle(), selectedWeapon);
+        client.entities(),
+        client.myPlayerId(),
+        view,
+        predicted,
+        aimAngle(),
+        selectedWeapon,
+        camera.visibleTiles());
   }
 
   private Hud.View hudView() {

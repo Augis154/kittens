@@ -78,17 +78,21 @@ resource must be on the classpath, hence `app/src/main/resources`.
 
 When probing, be careful that the *probe* isn't what's wrong. Traps hit repeatedly in practice: a
 plain `Actor` target has finite health and no respawn, so enemies kill it mid-measurement and every
-later assertion silently reads a dead target; firing "into open space" on `arena.txt` usually means
-firing into a wall a few tiles away; and enemies spawned already touching their target swing in
-lockstep, which flatters anything that rate-limits damage.
+later assertion silently reads a dead target; firing "into open space" usually means firing into a
+wall a few tiles away, so check the map before picking coordinates; and enemies spawned already
+touching their target swing in lockstep, which flatters anything that rate-limits damage.
 
 To *see* the client instead of measuring it, don't try to screen-grab: under WSLg the X11 root
 window is black, so `ffmpeg -f x11grab` captures nothing. Render the panel offscreen instead — build
 a `Client` on the EDT, `setSize` it to its preferred size, and `paint()` it into a `BufferedImage`.
-No window ever has to be shown, and `dispatchEvent` with synthetic `MouseEvent`/`KeyEvent`s drives
-firing and movement so HUD states (reload, low health, downed) can be captured. Such a probe needs
-`package kittens.client` for `GameClient`, and Gson on the classpath — easiest via
-`./gradlew installDist` and `app/build/install/app/lib/*`.
+No window ever has to be shown. Such a probe needs `package kittens.client` for `GameClient`, and
+Gson on the classpath — easiest via `./gradlew installDist` and `app/build/install/app/lib/*`.
+
+Driving that panel has two non-obvious requirements. Add it to a `JFrame` and `pack()` it (still
+never shown): `MouseEvent`'s constructor calls `getLocationOnScreen`, which needs a peer. And feed
+keys **straight to `panel.getKeyListeners()`** rather than via `dispatchEvent` — AWT routes key
+events through the `KeyboardFocusManager` to the focus owner, and an unshown frame has none, so they
+are silently dropped and the kitten never moves while the rest of the frame looks fine.
 
 ## Architecture
 
@@ -101,8 +105,22 @@ rendering and no socket code.** It is the shared simulation both sides run.
 - **`server/`** — `Server` (socket accept), `ClientConnection`, `ServerLoop`, `GameWorld`,
   `ServerPlayer`, `Projectile`, `Explosion`, `SpawnDirector`.
 - **`client/`** — `GameClient` (networking), `Client` (window, input, prediction, frame loop),
-  `WorldView` (between-snapshot smoothing + cosmetic effects), `Renderer` (arena drawing),
-  `Hud` (screen-space overlay), `Theme` (palette, fonts, panel/text primitives), `AssetManager`.
+  `Camera` (viewport, follow, world/screen conversion), `WorldView` (between-snapshot smoothing +
+  cosmetic effects), `Renderer` (arena drawing), `Hud` (screen-space overlay), `Theme` (palette,
+  fonts, panel/text primitives), `AssetManager`.
+
+### Levels
+
+Plain text loaded by `TileMap`, one character per tile: `.` floor, `#` wall, `S` spawn.
+`GameConfig.MAP_RESOURCE` picks which one. `maps/sewers.txt` is the default — 60x36 tiles (four
+rooms, a central hub, a corridor ring), deliberately larger than the 25x15-tile viewport so the
+camera has somewhere to scroll. `maps/arena.txt` is the original single-screen map, exactly one
+viewport, which is why it stays around for probes.
+
+A level has to be rectangular, sealed by walls on every edge, and have all its open cells mutually
+reachable — **nothing checks any of this at load time**, so a level with a walled-off room simply
+strands enemies in it. Corridors want to be at least 2 tiles wide (a rat's box is 22px against a
+32px tile), and avoiding lanes that run the full width or height keeps sightlines from dominating.
 
 ### Authority and prediction
 
@@ -190,10 +208,17 @@ correctly at this map size and is never stale.
   numbers both simulations must agree on. New drawing belongs in `Renderer` (world) or `Hud`
   (overlay), and anything that has to move between snapshots belongs in `WorldView` — `Renderer` is
   a pure function of a `Renderer.Scene` and owns no mutable state.
-- **Two coordinate spaces per frame.** `Client.paintComponent` draws the arena scaled by
-  `RENDER_SCALE`, then restores the transform and hands `Hud` the native window size, so HUD text
-  stays crisp. Anything screen-space (the crosshair, cursor-driven UI) needs the raw event pixels —
-  `Client` keeps both `mouseX/mouseY` (world, for aiming) and `screenMouseX/screenMouseY`.
+- **Two coordinate spaces per frame, and `Camera` owns the conversion.** `Client.paintComponent`
+  applies the camera (which offsets by the viewport and scales by `RENDER_SCALE`), draws the arena
+  in world coordinates, then restores the transform and hands `Hud` the native window size so HUD
+  text stays crisp. Do not reimplement the arithmetic: use `Camera.worldX`/`worldY`, which are exact
+  inverses of `Camera.apply`.
+- **Only the cursor's *screen* position is state.** `Client` stores `screenMouseX/screenMouseY` and
+  derives the world position through the camera on demand. A cached world cursor position would go
+  stale the moment the camera panned, dragging the aim off the crosshair with it.
+- **The map is bigger than the window, so tile drawing is culled.** `Camera.visibleTiles()` produces
+  the `Renderer.Tiles` block carried on the `Scene`, and both map passes iterate only that. Anything
+  new that walks the whole grid per frame will cost ~4x more than it needs to.
 - **All gameplay tuning lives in `GameConfig`**, shared so client and server agree. Put new numbers
   there rather than inline, and keep the reasoning in the javadoc — several constants document
   measured trade-offs, not arbitrary picks.
@@ -216,9 +241,10 @@ Not bugs to fix on sight — context so you don't mistake them for accidents:
   lines of window setup, key/mouse handling, prediction, and the frame loop. The design brief also
   asks for an `InputHandler` and `Screen` states (`MainMenu` / `Lobby` / `InGame`); neither exists,
   so there is no menu and no lobby — a client joins the match the moment it connects.
-- **No camera.** The window is a fixed, non-resizable render of the entire map scaled by
-  `RENDER_SCALE`, which blocks any level larger than one screen.
 - **Wave state never reaches the client.** `SpawnDirector.currentWave()` and `isWaveInProgress()`
   have no callers; nothing displays the wave number or intermission.
-- **Enemies spawn on the player `S` tiles**, so waves only ever enter from the four map corners.
+- **Enemies and players share the `S` tiles.** There is no separate enemy-spawn glyph, so waves can
+  only enter where players also spawn, and `SpawnDirector.MIN_SPAWN_DIST` is the only thing keeping
+  them out of the room the players are standing in. A level that wants waves to arrive from a chosen
+  direction needs a new `Tile` kind.
 - Guava is a declared dependency but unused.
