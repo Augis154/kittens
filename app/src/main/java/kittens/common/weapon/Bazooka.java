@@ -4,9 +4,9 @@ package kittens.common.weapon;
 public class Bazooka extends Weapon {
   Bazooka() {
     super(3, "bazooka", "Bazooka",
-        /* fireInterval */ 1.25, /* damage */ 35, /* pellets */ 1, /* spread */ 0.00f,
-        /* projectileSpeed */ 300f, /* projectileLifetime */ 2.4,
-        /* magazineSize */ 1, /* reloadTime */ 1.5,
-        /* explosionRadius */ 78f, /* explosionDamage */ 45, /* recoil */ 240f);
+        1.25, 35, 1, 0.00f,
+        300f, 2.4,
+        1, 1.5,
+        78f, 45, 240f);
   }
 }

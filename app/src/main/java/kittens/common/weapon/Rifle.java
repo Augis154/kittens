@@ -4,8 +4,8 @@ package kittens.common.weapon;
 public class Rifle extends Weapon {
   Rifle() {
     super(2, "ak", "Rifle",
-        /* fireInterval */ 0.10, /* damage */ 8, /* pellets */ 1, /* spread */ 0.05f,
-        /* projectileSpeed */ 520f, /* projectileLifetime */ 1.1,
-        /* magazineSize */ 30, /* reloadTime */ 2.0);
+        0.10, 8, 1, 0.05f,
+        520f, 1.1,
+        30, 2.0);
   }
 }
