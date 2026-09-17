@@ -2,7 +2,7 @@ package kittens.common.math;
 
 import java.util.Objects;
 
-/** Immutable 2D vector of floats. */
+/** Immutable 2D float vector. */
 public final class Vec2 {
   public static final Vec2 ZERO = new Vec2(0f, 0f);
 
@@ -10,13 +10,18 @@ public final class Vec2 {
 
   public final float x, y;
 
-  public Vec2(float x, float y) {
+  private Vec2(float x, float y) {
     this.x = x;
     this.y = y;
   }
 
   public static Vec2 of(float x, float y) {
     return new Vec2(x, y);
+  }
+
+  /** Unit vector pointing along {@code angle} radians. */
+  public static Vec2 fromAngle(double angle) {
+    return new Vec2((float) Math.cos(angle), (float) Math.sin(angle));
   }
 
   public Vec2 add(Vec2 o) {
@@ -31,25 +36,10 @@ public final class Vec2 {
     return new Vec2(x * s, y * s);
   }
 
-  public Vec2 withX(float nx) {
-    return new Vec2(nx, y);
-  }
-
-  public Vec2 withY(float ny) {
-    return new Vec2(x, ny);
-  }
-
   /** Unit-length copy, or {@link #ZERO} if this vector is ~zero length. */
   public Vec2 normalized() {
     float len = length();
-    if (len < EPSILON) {
-      return ZERO;
-    }
-    return new Vec2(x / len, y / len);
-  }
-
-  public float dot(Vec2 o) {
-    return x * o.x + y * o.y;
+    return len < EPSILON ? ZERO : new Vec2(x / len, y / len);
   }
 
   public float length() {
@@ -66,13 +56,7 @@ public final class Vec2 {
 
   @Override
   public boolean equals(Object obj) {
-    if (this == obj) {
-      return true;
-    }
-    if (!(obj instanceof Vec2 other)) {
-      return false;
-    }
-    return Float.compare(x, other.x) == 0 && Float.compare(y, other.y) == 0;
+    return obj instanceof Vec2 o && Float.compare(x, o.x) == 0 && Float.compare(y, o.y) == 0;
   }
 
   @Override

@@ -6,19 +6,13 @@ import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
 
 /**
- * A breadth-first distance field over a {@link TileMap}'s walkable cells, measured outwards from one
- * or more goal positions. {@link #directionAt} reads the local gradient and hands back the step that
- * most reduces the distance to the nearest goal, so pursuers route around walls instead of wedging
- * against them.
- *
- * <p>One field serves every pursuer on the map: the search runs from the goals outwards, so a single
- * pass answers "which way from here?" for all of them. Immutable once built — rebuild it when the
- * goals move. Pure and free of rendering or networking, like {@link PlayerMotion}.
+ * Breadth-first distance field over the walkable tiles, measured outwards from every goal, so one
+ * pass answers "which way to the nearest goal?" for every pursuer. Immutable: rebuild when goals move.
  */
 public final class PathField {
   private static final int UNREACHABLE = Integer.MAX_VALUE;
 
-  /** Neighbour offsets: the four orthogonal steps first, then the four diagonals. */
+  /** Four orthogonal steps, then the four diagonals. */
   private static final int[][] STEPS = {
     {1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
   };
@@ -33,27 +27,21 @@ public final class PathField {
     this.empty = empty;
   }
 
-  /**
-   * Builds the field for {@code map}, with a step count of zero on the tile under each goal.
-   * Goals outside the map or inside a wall are ignored; with no usable goal left, every
-   * {@link #directionAt} answers {@link Vec2#ZERO}.
-   */
+  /** Goals outside the map or inside a wall are ignored; with none left every direction is zero. */
   public static PathField toward(TileMap map, Collection<Vec2> goals) {
     int width = map.width();
     int cells = width * map.height();
     int[] dist = new int[cells];
     Arrays.fill(dist, UNREACHABLE);
 
-    // Each cell is enqueued at most once (it is only ever lowered from UNREACHABLE), so the ring
-    // buffer can never overflow and needs no growth check.
+    // Each cell is enqueued at most once, so a plain array is a big enough queue.
     int[] queue = new int[cells];
     int head = 0;
     int tail = 0;
-
     for (Vec2 goal : goals) {
-      int col = tileCol(map, goal);
-      int row = tileRow(map, goal);
-      if (map.isWall(col, row)) { // also covers out-of-bounds
+      int col = map.colAt(goal.x);
+      int row = map.rowAt(goal.y);
+      if (map.isWall(col, row)) {
         continue;
       }
       int index = row * width + col;
@@ -77,7 +65,7 @@ public final class PathField {
         }
         int nextIndex = nextRow * width + nextCol;
         if (dist[nextIndex] <= next) {
-          continue; // breadth-first, so an already-set distance is never worse
+          continue;
         }
         dist[nextIndex] = next;
         queue[tail++] = nextIndex;
@@ -87,23 +75,20 @@ public final class PathField {
   }
 
   /**
-   * The unit step from {@code from} toward the nearest goal, or {@link Vec2#ZERO} when the caller is
-   * already on a goal tile or has no route at all. Aims at the centre of the next tile, which keeps
-   * pursuers off the walls they are rounding.
+   * Unit step from {@code from} toward the nearest goal, aimed at the centre of the next tile, or
+   * zero when already on a goal tile or without a route. Only ever moves downhill, which also lets
+   * a body stuck inside a wall step out toward any routed cell.
    */
   public Vec2 directionAt(Vec2 from) {
     if (empty) {
       return Vec2.ZERO;
     }
-    int col = tileCol(map, from);
-    int row = tileRow(map, from);
+    int col = map.colAt(from.x);
+    int row = map.rowAt(from.y);
     int here = distAt(col, row);
     if (here == 0) {
-      return Vec2.ZERO; // same tile as a goal — the caller can close the gap directly
+      return Vec2.ZERO;
     }
-
-    // Only ever move downhill. Starting at `here` also lets an enemy that has ended up inside a wall
-    // or a sealed pocket (where `here` is UNREACHABLE) step out toward any cell that has a route.
     int bestDist = here;
     int bestCol = -1;
     int bestRow = -1;
@@ -120,36 +105,16 @@ public final class PathField {
         bestRow = nextRow;
       }
     }
-    if (bestCol < 0) {
-      return Vec2.ZERO;
-    }
-    return tileCenter(map, bestCol, bestRow).sub(from).normalized();
+    return bestCol < 0 ? Vec2.ZERO : map.cellCenter(bestCol, bestRow).sub(from).normalized();
   }
 
-  /**
-   * Whether a diagonal {@code step} out of ({@code col}, {@code row}) would squeeze past a wall
-   * corner — a route the collision box would refuse to walk, so the field must not offer it.
-   */
+  /** A diagonal past a wall corner is a route the collision box would refuse to walk. */
   private static boolean cutsCorner(TileMap map, int col, int row, int[] step) {
-    return step[0] != 0
-        && step[1] != 0
+    return step[0] != 0 && step[1] != 0
         && (map.isWall(col + step[0], row) || map.isWall(col, row + step[1]));
   }
 
   private int distAt(int col, int row) {
     return map.inBounds(col, row) ? dist[row * map.width() + col] : UNREACHABLE;
-  }
-
-  private static int tileCol(TileMap map, Vec2 pos) {
-    return (int) Math.floor(pos.x / map.tileSize());
-  }
-
-  private static int tileRow(TileMap map, Vec2 pos) {
-    return (int) Math.floor(pos.y / map.tileSize());
-  }
-
-  private static Vec2 tileCenter(TileMap map, int col, int row) {
-    float size = map.tileSize();
-    return Vec2.of((col + 0.5f) * size, (row + 0.5f) * size);
   }
 }

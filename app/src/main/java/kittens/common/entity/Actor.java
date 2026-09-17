@@ -1,13 +1,14 @@
 package kittens.common.entity;
 
+import kittens.common.GameConfig;
 import kittens.common.math.Vec2;
 
-/** A moving, damageable game object: base for players and enemies. */
+/** A damageable object with a facing and a decaying knockback impulse: base of players and enemies. */
 public class Actor extends GameObject {
-  protected Vec2 velocity = Vec2.ZERO;
+  protected final double maxHealth;
   protected double health;
-  protected double maxHealth;
   protected double facing;
+  protected Vec2 knockback = Vec2.ZERO;
 
   public Actor(int id, Vec2 pos, Vec2 size, double maxHealth) {
     super(id, pos, size);
@@ -15,12 +16,7 @@ public class Actor extends GameObject {
     this.health = maxHealth;
   }
 
-  @Override
-  public void update(double dt) {
-    pos = pos.add(velocity.scale((float) dt));
-  }
-
-  /** Apply damage; clamps health at 0 and kills the actor when it reaches 0. */
+  /** Clamps health at 0 and kills the actor when it gets there. */
   public void damage(double amount) {
     if (amount <= 0) {
       return;
@@ -32,39 +28,26 @@ public class Actor extends GameObject {
     }
   }
 
-  /** Restore health, clamped at {@link #maxHealth}. */
   public void heal(double amount) {
-    if (amount <= 0) {
-      return;
+    if (amount > 0) {
+      health = Math.min(maxHealth, health + amount);
     }
-    health = Math.min(maxHealth, health + amount);
   }
 
-  public boolean isDead() {
-    return health <= 0 || !alive;
+  /** Adds a shove in px/s that {@link #decayKnockback} bleeds off over the next few ticks. */
+  public void applyKnockback(Vec2 force) {
+    knockback = knockback.add(force);
   }
 
-  public Vec2 velocity() {
-    return velocity;
-  }
-
-  public void setVelocity(Vec2 velocity) {
-    this.velocity = velocity;
+  protected void decayKnockback(double dt) {
+    knockback = knockback.scale((float) Math.max(0, 1.0 - dt * GameConfig.KNOCKBACK_DECAY));
   }
 
   public double health() {
     return health;
   }
 
-  public double maxHealth() {
-    return maxHealth;
-  }
-
   public double facing() {
     return facing;
-  }
-
-  public void setFacing(double facing) {
-    this.facing = facing;
   }
 }

@@ -2,26 +2,26 @@ package kittens.server;
 
 import java.io.IOException;
 import java.net.ServerSocket;
-import java.net.Socket;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import kittens.common.GameConfig;
 import kittens.common.map.TileMap;
 import kittens.common.net.InputCommand;
 import kittens.common.net.Join;
 import kittens.common.net.JoinAccepted;
 import kittens.common.net.Message;
-import kittens.common.net.Snapshot;
+import kittens.common.net.MessageChannel;
 
 /**
- * Accepts client sockets, runs the authoritative {@link GameWorld} on a fixed tick, and broadcasts a
- * {@link Snapshot} to every client each tick. Wire format is newline-delimited JSON.
+ * Accepts sockets on the main thread, reads each client on its own {@code client-<id>} thread, and
+ * runs the authoritative {@link GameWorld} on the {@link ServerLoop} thread, which also sends one
+ * {@code Snapshot} per client per tick (the ack and ammo fields are recipient-specific).
  */
 public final class Server {
   private final GameWorld world =
       new GameWorld(TileMap.fromResource(GameConfig.MAP_RESOURCE, GameConfig.TILE));
-  private final CopyOnWriteArrayList<ClientConnection> connections = new CopyOnWriteArrayList<>();
-  private final AtomicInteger nextPlayerId = new AtomicInteger();
+  private final Map<Integer, MessageChannel> clients = new ConcurrentHashMap<>();
+  private int nextPlayerId;
 
   public static void main(String[] args) throws IOException {
     new Server().run();
@@ -29,48 +29,41 @@ public final class Server {
 
   private void run() throws IOException {
     new ServerLoop(GameConfig.TICK_HZ, this::tick).start();
-
     try (ServerSocket serverSocket = new ServerSocket(GameConfig.PORT)) {
-      System.out.println("Server on port " + GameConfig.PORT + ", map " + world.mapId()
+      System.out.println("Server on port " + GameConfig.PORT + ", map " + GameConfig.MAP_ID
           + " @ " + GameConfig.TICK_HZ + " Hz");
       while (true) {
-        Socket socket = serverSocket.accept();
-        socket.setTcpNoDelay(true);
-        int id = nextPlayerId.getAndIncrement();
-        ClientConnection conn = new ClientConnection(id, socket);
-        connections.add(conn);
-        Thread reader = new Thread(
-            () -> conn.readLoop(this::onMessage, this::onDisconnect), "client-" + id);
+        MessageChannel channel = new MessageChannel(serverSocket.accept());
+        int id = nextPlayerId++;
+        clients.put(id, channel);
+        Thread reader = new Thread(() -> serve(id, channel), "client-" + id);
         reader.setDaemon(true);
         reader.start();
       }
     }
   }
 
-  private void onMessage(ClientConnection conn, Message message) {
-    switch (message) {
-      case Join ignored -> {
-        world.addPlayer(conn.playerId());
-        conn.send(new JoinAccepted(conn.playerId(), world.mapId()));
-        System.out.println("player " + conn.playerId() + " joined ("
-            + GameConfig.kittenSprite(conn.playerId()) + ")");
-      }
-      case InputCommand input -> world.applyInput(conn.playerId(), input);
-      default -> System.err.println("unexpected message from client: " + message);
-    }
+  private void serve(int id, MessageChannel channel) {
+    channel.readLoop(message -> onMessage(id, channel, message));
+    clients.remove(id);
+    world.removePlayer(id);
+    System.out.println("player " + id + " left");
   }
 
-  private void onDisconnect(ClientConnection conn) {
-    connections.remove(conn);
-    world.removePlayer(conn.playerId());
-    System.out.println("player " + conn.playerId() + " left");
+  private void onMessage(int id, MessageChannel channel, Message message) {
+    switch (message) {
+      case Join ignored -> {
+        world.addPlayer(id);
+        channel.send(new JoinAccepted(id, GameConfig.MAP_ID));
+        System.out.println("player " + id + " joined (" + GameConfig.kittenSprite(id) + ")");
+      }
+      case InputCommand input -> world.applyInput(id, input);
+      default -> System.err.println("unexpected message from player " + id + ": " + message);
+    }
   }
 
   private void tick(double dt) {
     world.tick(dt);
-    // Each client gets its own snapshot so ackSeq reflects that client's processed input.
-    for (ClientConnection conn : connections) {
-      conn.send(world.snapshotFor(conn.playerId()));
-    }
+    clients.forEach((id, channel) -> channel.send(world.snapshotFor(id)));
   }
 }

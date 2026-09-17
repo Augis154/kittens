@@ -1,32 +1,24 @@
 package kittens.common.weapon;
 
 /**
- * A weapon's tuning and the behaviour derived from it. All the numbers live in the concrete
- * subclasses so the server's fire logic and the client's HUD/rendering stay in agreement;
- * {@link #id()} is what travels on the wire.
- *
- * <p>Every weapon in the game is one of the singletons in this class ({@link #PISTOL} and friends),
- * which is why code may compare weapons with {@code ==}. Subclass constructors are package-private
- * to keep that true: the registry below is the only place instances come from.
- *
- * <p>Accessors are deliberately overridable rather than public fields, so a subclass can compute a
- * value instead of storing one.
+ * A weapon's tuning. Every weapon is one of the Singleton constants below (a small registry), so
+ * code may compare weapons with {@code ==}; subclass constructors are package-private to keep that
+ * true. {@link #id()} is the wire value and the registry index, and adding a weapon means appending
+ * with the next id — never renumbering.
  */
 public abstract class Weapon {
-
   public static final Weapon PISTOL = new Pistol();
   public static final Weapon SHOTGUN = new Shotgun();
   public static final Weapon RIFLE = new Rifle();
   public static final Weapon BAZOOKA = new Bazooka();
 
-  /** Indexed by {@link #id()}, which is therefore also the weapon's hotkey order. */
+  /** Indexed by {@link #id()}, which is therefore also the hotkey order. */
   private static final Weapon[] BY_ID = {PISTOL, SHOTGUN, RIFLE, BAZOOKA};
 
   static {
     for (int i = 0; i < BY_ID.length; i++) {
       if (BY_ID[i].id() != i) {
-        throw new IllegalStateException(
-            "weapon id must match its registry index: " + BY_ID[i].displayName());
+        throw new IllegalStateException("weapon id must match its registry index: " + BY_ID[i]);
       }
     }
   }
@@ -74,7 +66,6 @@ public abstract class Weapon {
     this.recoil = recoil;
   }
 
-  /** Wire identity, and the index into the registry; stable across client and server. */
   public int id() {
     return id;
   }
@@ -103,7 +94,7 @@ public abstract class Weapon {
     return pellets;
   }
 
-  /** Half-angle of the random spread cone, in radians. */
+  /** Half-angle of the spread cone, radians. */
   public float spread() {
     return spread;
   }
@@ -116,41 +107,40 @@ public abstract class Weapon {
     return projectileLifetime;
   }
 
-  /** Rounds per magazine; the kitten reloads when it hits 0. Reserve ammo is unlimited. */
+  /** Rounds per magazine; reserve ammo is unlimited. */
   public int magazineSize() {
     return magazineSize;
   }
 
-  /** Seconds to reload a full magazine. */
   public double reloadTime() {
     return reloadTime;
   }
 
-  /** Blast radius in pixels when a projectile from this weapon dies; 0 = no explosion. */
+  /** Blast radius in pixels when a projectile dies; 0 = no explosion. */
   public float explosionRadius() {
     return explosionRadius;
   }
 
-  /** Peak splash damage at the blast centre, falling off to a quarter at the edge. */
+  /** Splash damage at the blast centre, falling off to a quarter at the rim. */
   public double explosionDamage() {
     return explosionDamage;
   }
 
-  /** Self-knockback impulse (px/s) shoved onto the shooter, opposite the aim; 0 = no recoil. */
+  /** Self-knockback (px/s) pushed onto the shooter, opposite the aim. */
   public float recoil() {
     return recoil;
   }
 
   public boolean explosive() {
-    return explosionRadius() > 0f;
+    return explosionRadius > 0f;
   }
 
   @Override
   public String toString() {
-    return displayName();
+    return displayName;
   }
 
-  /** The weapon with this wire id, falling back to the pistol for anything out of range. */
+  /** The weapon with this wire id, or the pistol for anything out of range. */
   public static Weapon byId(int id) {
     return id < 0 || id >= BY_ID.length ? PISTOL : BY_ID[id];
   }

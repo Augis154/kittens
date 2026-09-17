@@ -6,12 +6,8 @@ import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
 
 /**
- * Turns {@link Message} values into JSON text and back. The wire format is a small envelope:
- *
- * <pre>{@code {"type":"input","data":{ ...the record's fields... }}}</pre>
- *
- * <p>Keeping the discriminator out of the payload record means the DTOs stay plain data with no
- * protocol bookkeeping in them.
+ * {@link Message} to JSON and back, wrapped in a {@code {"type":..,"data":..}} envelope so the
+ * records stay plain data with no protocol bookkeeping in them.
  */
 public final class MessageCodec {
   private static final Gson GSON = new Gson();

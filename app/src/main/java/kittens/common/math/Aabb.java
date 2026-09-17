@@ -18,29 +18,8 @@ public final class Aabb {
     return new Aabb(center.x - hw, center.y - hh, center.x + hw, center.y + hh);
   }
 
-  /** Box whose top-left corner is {@code topLeft}, extending by {@code size}. */
-  public static Aabb fromTopLeft(Vec2 topLeft, Vec2 size) {
-    return new Aabb(topLeft.x, topLeft.y, topLeft.x + size.x, topLeft.y + size.y);
-  }
-
   public boolean intersects(Aabb o) {
     return minX <= o.maxX && maxX >= o.minX && minY <= o.maxY && maxY >= o.minY;
-  }
-
-  public boolean contains(Vec2 p) {
-    return p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY;
-  }
-
-  public Vec2 center() {
-    return new Vec2((minX + maxX) * 0.5f, (minY + maxY) * 0.5f);
-  }
-
-  public Vec2 size() {
-    return new Vec2(maxX - minX, maxY - minY);
-  }
-
-  public Aabb translate(Vec2 d) {
-    return new Aabb(minX + d.x, minY + d.y, maxX + d.x, maxY + d.y);
   }
 
   @Override

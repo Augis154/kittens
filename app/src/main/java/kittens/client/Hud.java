@@ -14,27 +14,21 @@ import kittens.common.GameConfig;
 import kittens.common.weapon.Weapon;
 
 /**
- * The screen-space overlay: hearts, weapon bar, ammo, crosshair, and the connecting/downed screens.
- *
- * <p>Drawn at native window resolution rather than in world coordinates, so HUD text is crisp
- * instead of being magnified by {@code RENDER_SCALE} along with the arena. Everything it needs
- * arrives in one {@link View} snapshot; it reads no network or input state of its own.
+ * The screen-space overlay: hearts, status, weapon bar, ammo, crosshair and the connecting/downed
+ * curtains. Drawn at native window resolution so text stays crisp; everything it needs arrives in
+ * one {@link View}.
  */
 final class Hud {
-  /** Number of heart icons the local player's health is split across. */
   private static final int HEART_COUNT = 5;
   private static final int HEART_SIZE = 30;
   private static final int HEART_GAP = 34;
-
   private static final int MARGIN = 16;
   private static final int SLOT_W = 88;
   private static final int SLOT_H = 60;
   private static final int SLOT_GAP = 8;
-
-  /** Health fraction below which the screen edges start bleeding red. */
+  /** Health fraction below which the screen edges bleed red. */
   private static final float LOW_HEALTH = 0.35f;
 
-  /** Everything the HUD draws, gathered once per frame by {@link Client}. */
   record View(
       int playerId,
       float hp,
@@ -56,19 +50,17 @@ final class Hud {
 
   void draw(Graphics2D g, int width, int height, View v) {
     Theme.quality(g);
-
     if (!v.connected()) {
       drawCurtain(g, width, height, "CONNECTING…", "waiting for the server", Theme.ACCENT);
       return;
     }
 
     float frac = Math.clamp(v.hp() / (float) GameConfig.PLAYER_MAX_HEALTH, 0f, 1f);
-    // Full-screen states go under the panels, so health and ammo stay readable while downed.
+    // Full-screen states go under the panels so health and ammo stay readable.
     if (v.downed()) {
       vignette(g, width, height, Theme.alpha(Theme.DANGER, 0.45f));
       drawCurtain(g, width, height, "DOWNED", "respawning at your spawn point…", Theme.DANGER);
     } else if (frac < LOW_HEALTH) {
-      // Pulse harder the closer to death, so peripheral vision carries the warning.
       float severity = 1f - frac / LOW_HEALTH;
       float pulse = (float) (0.65 + 0.35 * Math.sin(System.nanoTime() / 1e9 * 6.0));
       vignette(g, width, height, Theme.alpha(Theme.DANGER, 0.30f * severity * pulse));
@@ -79,13 +71,10 @@ final class Hud {
     drawWeaponBar(g, width, height, v);
     drawAmmo(g, width, height, v);
     drawControls(g, height);
-
     if (!v.downed()) {
       drawCrosshair(g, v);
     }
   }
-
-  // ---- health ---------------------------------------------------------------
 
   private void drawHearts(Graphics2D g, View v, float frac) {
     int panelW = (HEART_COUNT - 1) * HEART_GAP + HEART_SIZE + 24;
@@ -101,13 +90,10 @@ final class Hud {
     for (int i = 0; i < HEART_COUNT; i++) {
       int hx = x0 + i * HEART_GAP;
       float fill = Math.clamp((v.hp() - i * perHeart) / perHeart, 0f, 1f);
-
-      // Empty slot: a faint ghost of the heart, so the maximum is always legible.
+      // Faint ghost so the maximum is always legible, then the filled part clipped to the fraction.
       g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.16f));
       g.drawImage(heart, hx, y0, HEART_SIZE, HEART_SIZE, null);
       g.setComposite(baseComposite);
-
-      // Filled portion: the full heart, clipped horizontally to the fraction remaining.
       if (fill > 0f) {
         g.setClip(hx, y0, Math.max(1, Math.round(HEART_SIZE * fill)), HEART_SIZE);
         g.drawImage(heart, hx, y0, HEART_SIZE, HEART_SIZE, null);
@@ -120,28 +106,23 @@ final class Hud {
     Theme.shadowedText(g, hp, x0, y0 + HEART_SIZE + 15, Theme.healthColor(frac));
   }
 
-  // ---- status pill ----------------------------------------------------------
-
   private void drawStatus(Graphics2D g, int width, View v) {
     g.setFont(Theme.FONT_LABEL);
     String tag = "P" + v.playerId();
     String enemies = v.enemyCount() + " hostile" + (v.enemyCount() == 1 ? "" : "s");
     int w = Math.max(Theme.textWidth(g, Theme.FONT_LABEL, tag),
-            Theme.textWidth(g, Theme.FONT_SMALL, enemies)) + 28;
+        Theme.textWidth(g, Theme.FONT_SMALL, enemies)) + 28;
     int x = width - MARGIN - w;
     Theme.panel(g, x, MARGIN, w, 52);
 
-    // Kitten swatch, so a player can tell at a glance which sprite is theirs.
     BufferedImage me = assets.kitten(GameConfig.kittenSprite(v.playerId()));
     g.drawImage(me, x + 8, MARGIN + 6, 20, 20, null);
     Theme.shadowedText(g, tag, x + 34, MARGIN + 22, Theme.TEXT);
 
     g.setFont(Theme.FONT_SMALL);
-    Color mood = v.enemyCount() == 0 ? Theme.TEXT_DIM : Theme.WARN;
-    Theme.shadowedText(g, enemies, x + 12, MARGIN + 42, mood);
+    Theme.shadowedText(g, enemies, x + 12, MARGIN + 42,
+        v.enemyCount() == 0 ? Theme.TEXT_DIM : Theme.WARN);
   }
-
-  // ---- weapon bar -----------------------------------------------------------
 
   private void drawWeaponBar(Graphics2D g, int width, int height, View v) {
     int count = Weapon.count();
@@ -153,8 +134,7 @@ final class Hud {
       Weapon w = Weapon.byId(i);
       boolean active = w == v.weapon();
       int x = x0 + i * (SLOT_W + SLOT_GAP);
-      // The selected slot lifts, brightens, and takes an accent border.
-      int top = active ? y - 6 : y;
+      int top = active ? y - 6 : y; // the selected slot lifts and takes an accent border
       int h = active ? SLOT_H + 6 : SLOT_H;
 
       Theme.panel(g, x, top, SLOT_W, h, active ? new Color(22, 32, 42, 205) : Theme.PANEL);
@@ -175,16 +155,13 @@ final class Hud {
       g.setComposite(baseComposite);
 
       g.setFont(Theme.FONT_SMALL);
-      String hotkey = String.valueOf(w.id() + 1);
-      Theme.shadowedText(g, hotkey, x + 7, top + 16, active ? Theme.ACCENT : Theme.TEXT_FAINT);
-
+      Theme.shadowedText(g, String.valueOf(w.id() + 1), x + 7, top + 16,
+          active ? Theme.ACCENT : Theme.TEXT_FAINT);
       String name = w.displayName();
       int nameX = x + (SLOT_W - Theme.textWidth(g, Theme.FONT_SMALL, name)) / 2;
       Theme.shadowedText(g, name, nameX, top + h - 9, active ? Theme.TEXT : Theme.TEXT_DIM);
     }
   }
-
-  // ---- ammo -----------------------------------------------------------------
 
   private void drawAmmo(Graphics2D g, int width, int height, View v) {
     int mag = v.weapon().magazineSize();
@@ -195,17 +172,16 @@ final class Hud {
     Theme.panel(g, x, y, panelW, panelH);
 
     boolean reloading = v.reload() > 0f;
-    // Clamp for display: the server's weapon can lag a fresh number-key press by a tick.
-    int ammo = Math.clamp(v.ammo(), 0, mag);
+    int ammo = Math.clamp(v.ammo(), 0, mag); // the server's weapon can lag a key press by a tick
     float frac = reloading ? Math.clamp(v.reload(), 0f, 1f) : ammo / (float) mag;
-    Color tint = reloading
-        ? Theme.WARN
-        : ammo == 0 ? Theme.DANGER : ammo <= Math.max(1, mag / 4) ? Theme.WARN : Theme.TEXT;
+    Color tint = reloading ? Theme.WARN
+        : ammo == 0 ? Theme.DANGER
+        : ammo <= Math.max(1, mag / 4) ? Theme.WARN
+        : Theme.TEXT;
 
     g.setFont(Theme.FONT_DISPLAY);
     String big = String.valueOf(ammo);
     Theme.shadowedText(g, big, x + 14, y + 34, tint);
-
     g.setFont(Theme.FONT_SMALL);
     int bigW = Theme.textWidth(g, Theme.FONT_DISPLAY, big);
     Theme.shadowedText(g, "/ " + mag, x + 20 + bigW, y + 34, Theme.TEXT_DIM);
@@ -220,14 +196,13 @@ final class Hud {
     int barH = 6;
     g.setColor(new Color(255, 255, 255, 34));
     g.fillRoundRect(barX, barY, barW, barH, barH, barH);
+    g.setColor(tint);
     if (reloading || mag > 12) {
-      g.setColor(tint);
       g.fillRoundRect(barX, barY, Math.max(2, Math.round(barW * frac)), barH, barH, barH);
     } else {
       int segGap = 3;
       int segW = (barW - (mag - 1) * segGap) / mag;
       for (int i = 0; i < ammo; i++) {
-        g.setColor(tint);
         g.fillRoundRect(barX + i * (segW + segGap), barY, segW, barH, barH, barH);
       }
     }
@@ -235,28 +210,17 @@ final class Hud {
 
   private void drawControls(Graphics2D g, int height) {
     g.setFont(Theme.FONT_SMALL);
-    Theme.shadowedText(
-        g,
-        "WASD move · mouse aim · click fire · 1-4 weapon · R reload",
-        MARGIN,
-        height - MARGIN - 4,
-        Theme.TEXT_FAINT);
+    Theme.shadowedText(g, "WASD move · mouse aim · click fire · 1-4 weapon · R reload",
+        MARGIN, height - MARGIN - 4, Theme.TEXT_FAINT);
   }
 
-  // ---- crosshair ------------------------------------------------------------
-
-  /**
-   * Replaces the system cursor (hidden by {@link Client}). The gap tracks the weapon's spread cone
-   * and blooms while firing, so the reticle itself communicates accuracy.
-   */
+  /** Replaces the hidden system cursor; the gap tracks the weapon's spread and blooms while firing. */
   private void drawCrosshair(Graphics2D g, View v) {
     int cx = v.cursorX();
     int cy = v.cursorY();
     boolean reloading = v.reload() > 0f;
     Color color = reloading ? Theme.WARN : v.ammo() == 0 ? Theme.DANGER : Theme.ACCENT;
-
-    float spreadPx = v.weapon().spread() * 90f;
-    int gap = Math.round(5 + spreadPx + v.recoilBloom() * 10f);
+    int gap = Math.round(5 + v.weapon().spread() * 90f + v.recoilBloom() * 10f);
     int len = 7;
 
     Stroke saved = g.getStroke();
@@ -266,12 +230,11 @@ final class Hud {
     g.setColor(color);
     ticks(g, cx, cy, gap, len);
     g.setStroke(saved);
-
     g.setColor(Theme.alpha(color, 0.9f));
     g.fillOval(cx - 1, cy - 1, 3, 3);
 
     if (reloading) {
-      // A ring that closes as the magazine fills: reload progress where the eyes already are.
+      // A ring that closes as the magazine fills, where the eyes already are.
       g.setStroke(new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
       int r = gap + len + 6;
       g.setColor(new Color(0, 0, 0, 110));
@@ -289,9 +252,7 @@ final class Hud {
     g.drawLine(cx, cy + gap, cx, cy + gap + len);
   }
 
-  // ---- full-screen states ---------------------------------------------------
-
-  /** Soft coloured bleed inward from all four screen edges. */
+  /** Soft coloured bleed inward from all four edges. */
   private static void vignette(Graphics2D g, int width, int height, Color edge) {
     Color clear = Theme.alpha(edge, 0f);
     int depth = Math.round(height * 0.28f);
@@ -305,18 +266,15 @@ final class Hud {
     g.fillRect(width - depth, 0, depth, height);
   }
 
-  private static void drawCurtain(
-      Graphics2D g, int width, int height, String title, String subtitle, Color tint) {
+  private static void drawCurtain(Graphics2D g, int width, int height, String title,
+      String subtitle, Color tint) {
     g.setColor(new Color(6, 7, 10, 105));
     g.fillRect(0, 0, width, height);
-
     Font titleFont = Theme.FONT_DISPLAY.deriveFont(46f);
     g.setFont(titleFont);
-    int tw = Theme.textWidth(g, titleFont, title);
-    Theme.shadowedText(g, title, (width - tw) / 2, height / 2, tint);
-
+    Theme.shadowedText(g, title, (width - Theme.textWidth(g, titleFont, title)) / 2, height / 2, tint);
     g.setFont(Theme.FONT_LABEL);
-    int sw = Theme.textWidth(g, Theme.FONT_LABEL, subtitle);
-    Theme.shadowedText(g, subtitle, (width - sw) / 2, height / 2 + 28, Theme.TEXT_DIM);
+    Theme.shadowedText(g, subtitle, (width - Theme.textWidth(g, Theme.FONT_LABEL, subtitle)) / 2,
+        height / 2 + 28, Theme.TEXT_DIM);
   }
 }

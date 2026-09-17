@@ -3,14 +3,9 @@ package kittens.common.net;
 import java.util.List;
 
 /**
- * Server -&gt; client: the authoritative world at a given tick, sent once per tick (~30 Hz).
- *
- * <p>{@code ackSeq} is the {@link InputCommand#seq()} of the last input the server has applied for
- * <em>this</em> recipient — the client drops acknowledged inputs and replays the rest on top of the
- * authoritative state (client-side prediction reconciliation).
- *
- * <p>{@code viewerAmmo} is the recipient's rounds left in the current weapon's magazine;
- * {@code viewerReload} is 0 when ready to fire, otherwise reload progress in (0, 1].
+ * Server -&gt; client, once per tick. {@code ackSeq} is the last {@link InputCommand#seq()} applied
+ * for <em>this</em> recipient; {@code viewerAmmo} and {@code viewerReload} (0 = ready, else
+ * progress in (0, 1]) describe the recipient's own weapon.
  */
 public record Snapshot(
     long tick,

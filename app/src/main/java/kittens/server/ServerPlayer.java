@@ -5,101 +5,60 @@ import kittens.common.GameConfig;
 import kittens.common.entity.Actor;
 import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
+import kittens.common.net.EntityKind;
 import kittens.common.net.EntityState;
 import kittens.common.net.InputCommand;
-import kittens.common.sim.PlayerMotion;
+import kittens.common.sim.Motion;
 import kittens.common.weapon.Weapon;
 
 /**
- * The server's authoritative view of one player. Inputs land in a queue from the connection's
- * reader thread; the world-loop thread drains them each tick, applying every command through the
- * shared {@link PlayerMotion} model and remembering the last {@code seq} it processed so the client
- * can reconcile its prediction. Also owns the selected weapon, fire cooldown, health and respawn.
+ * The server's authoritative player. Inputs are queued by the connection's reader thread and
+ * drained on the loop thread, each applied through the shared {@link Motion} model with
+ * {@link GameConfig#TICK_DT} so the client can replay them identically.
  */
 final class ServerPlayer extends Actor {
-  /** Fixed per-input time step — the client predicts with the exact same value. */
-  static final double INPUT_DT = 1.0 / GameConfig.TICK_HZ;
-
-  /** Cap catch-up so a burst of queued inputs can't teleport a player in one tick. */
+  /** Cap on catch-up so a burst of queued inputs can't teleport a player in one tick. */
   private static final int MAX_INPUTS_PER_TICK = 5;
 
   private final Vec2 spawn;
   private final ConcurrentLinkedQueue<InputCommand> inbox = new ConcurrentLinkedQueue<>();
+  private final Loadout loadout = new Loadout();
 
   private boolean firing;
-  private Weapon weapon = Weapon.PISTOL;
-  private double fireCooldown;
-  private double respawnTimer;
-  /**
-   * Seconds of damage immunity left; while this is running the player cannot be hurt. Covers both
-   * the grace for arriving at a spawn point and the brief i-frame granted by every hit taken.
-   */
-  private double invulnerableTimer;
-  private long lastProcessedSeq = -1;
-  private Vec2 knockback = Vec2.ZERO;
-
-  /** Rounds left in each weapon's magazine, indexed by {@link Weapon#id()}. */
-  private final int[] magAmmo = new int[Weapon.count()];
-  /** Seconds left on the current reload; 0 = not reloading. */
-  private double reloadTimer;
-
   private boolean fireRequested;
+  private double respawnTimer;
+  /** Spawn grace and the post-hit i-frame share this one timer. */
+  private double invulnerableTimer = GameConfig.RESPAWN_INVULNERABILITY;
+  private long lastProcessedSeq = -1;
 
   ServerPlayer(int id, Vec2 spawn) {
-    super(
-        id,
-        spawn,
-        Vec2.of(GameConfig.PLAYER_SIZE, GameConfig.PLAYER_SIZE),
+    super(id, spawn, Vec2.of(GameConfig.PLAYER_SIZE, GameConfig.PLAYER_SIZE),
         GameConfig.PLAYER_MAX_HEALTH);
     this.spawn = spawn;
-    refillAllMagazines();
-    // A player joining mid-wave is arriving at a spawn point too, so they get the same grace.
-    invulnerableTimer = GameConfig.RESPAWN_INVULNERABILITY;
-  }
-
-  private void refillAllMagazines() {
-    for (int i = 0; i < magAmmo.length; i++) {
-      magAmmo[i] = Weapon.byId(i).magazineSize();
-    }
   }
 
   float aimAngle() {
     return (float) facing;
   }
 
-  Weapon weapon() {
-    return weapon;
-  }
-
-  boolean dead() {
-    return isDead();
-  }
-
-  /** Whether an active immunity window (spawn grace or post-hit i-frame) is blocking damage. */
-  boolean invulnerable() {
-    return invulnerableTimer > 0;
+  Loadout loadout() {
+    return loadout;
   }
 
   long lastProcessedSeq() {
     return lastProcessedSeq;
   }
 
+  /** Called from the reader thread. */
   void acceptInput(InputCommand cmd) {
     inbox.add(cmd);
   }
 
   void tick(double dt, TileMap map) {
-    fireCooldown = Math.max(0, fireCooldown - dt);
     invulnerableTimer = Math.max(0, invulnerableTimer - dt);
-    if (reloadTimer > 0) {
-      reloadTimer -= dt;
-      if (reloadTimer <= 0) {
-        reloadTimer = 0;
-        magAmmo[weapon.id()] = weapon.magazineSize();
-      }
-    }
+    loadout.tick(dt);
 
-    if (dead()) {
+    if (!isAlive()) {
       respawnTimer -= dt;
       if (respawnTimer <= 0) {
         respawn();
@@ -114,130 +73,52 @@ final class ServerPlayer extends Actor {
         break;
       }
       if (cmd.seq() <= lastProcessedSeq) {
-        continue; // stale / duplicate
+        continue; // stale or duplicate
       }
       lastProcessedSeq = cmd.seq();
       facing = cmd.aimAngle();
       firing = cmd.firing();
-      selectWeapon(Weapon.byId(cmd.weaponId()));
+      loadout.select(Weapon.byId(cmd.weaponId()));
       if (cmd.reload()) {
-        requestReload();
+        loadout.requestReload();
       }
-      pos = PlayerMotion.step(map, pos, cmd.moveX(), cmd.moveY(), GameConfig.PLAYER_SPEED, INPUT_DT);
+      pos = Motion.step(map, pos, cmd.moveX(), cmd.moveY(), GameConfig.PLAYER_SPEED,
+          GameConfig.TICK_DT);
     }
 
-    // External knockback (e.g. bazooka recoil): applied on top of input, then decayed.
+    // Knockback (bazooka recoil) rides on top of the input-driven movement.
     if (knockback.lengthSq() > 1e-4f) {
-      float kbSpeed = knockback.length();
-      pos = PlayerMotion.step(
-          map, pos, knockback.x / kbSpeed, knockback.y / kbSpeed, kbSpeed, dt);
+      float speed = knockback.length();
+      pos = Motion.step(map, pos, knockback.x / speed, knockback.y / speed, speed, dt);
     }
-    knockback = knockback.scale((float) Math.max(0, 1.0 - dt * GameConfig.KNOCKBACK_DECAY));
+    decayKnockback(dt);
 
-    if (firing && fireCooldown <= 0 && reloadTimer <= 0) {
-      if (magAmmo[weapon.id()] > 0) {
-        fireRequested = true;
-        fireCooldown = weapon.fireInterval();
-        magAmmo[weapon.id()]--;
-        if (magAmmo[weapon.id()] == 0) {
-          reloadTimer = weapon.reloadTime(); // auto-reload once the magazine runs dry
-        }
-      } else {
-        reloadTimer = weapon.reloadTime();
-      }
+    if (firing && loadout.tryFire()) {
+      fireRequested = true;
     }
   }
 
-  int magAmmo() {
-    return magAmmo[weapon.id()];
-  }
-
-  /** Whether a health pickup would do anything for this player. */
-  boolean wantsHealth() {
-    return !dead() && health < maxHealth;
-  }
-
-  /**
-   * Whether an ammo pickup would do anything: any magazine short of full, or a reload running that
-   * {@link #restockAmmo()} would cut short.
-   */
-  boolean wantsAmmo() {
-    if (reloadTimer > 0) {
-      return true;
-    }
-    for (int i = 0; i < magAmmo.length; i++) {
-      if (magAmmo[i] < Weapon.byId(i).magazineSize()) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Tops every magazine up and cancels any reload in progress. Reserve ammo is unlimited, so what
-   * an ammo crate really buys is the reload time it skips.
-   */
-  void restockAmmo() {
-    reloadTimer = 0;
-    refillAllMagazines();
-  }
-
-  /**
-   * Start a manual reload of the current weapon. Ignored while already reloading or when the
-   * magazine is full, so spamming the key can't cancel and restart the timer.
-   */
-  private void requestReload() {
-    if (reloadTimer > 0 || magAmmo[weapon.id()] >= weapon.magazineSize()) {
-      return;
-    }
-    reloadTimer = weapon.reloadTime();
-  }
-
-  /**
-   * 0 when ready to fire; otherwise reload progress in (0, 1]. Clamped away from 0 so the tick a
-   * reload starts still reports as reloading — otherwise the HUD misses the first snapshot of it.
-   */
-  float reloadProgress() {
-    return reloadTimer <= 0
-        ? 0f
-        : Math.max(1e-3f, (float) (1.0 - reloadTimer / weapon.reloadTime()));
-  }
-
-  /** Shove this player by {@code force} (px/s); decays over the next few ticks. */
-  void applyKnockback(Vec2 force) {
-    knockback = knockback.add(force);
-  }
-
-  private void selectWeapon(Weapon next) {
-    if (next == weapon) {
-      return;
-    }
-    weapon = next;
-    reloadTimer = 0; // switching cancels an in-progress reload
-    // Switching can't fire sooner than the new weapon allows, but also can't be gamed to skip an
-    // already-shorter cooldown.
-    fireCooldown = Math.min(fireCooldown, next.fireInterval());
-  }
-
-  /** Returns whether the player wants to fire this tick, clearing the request. */
+  /** Whether the player wants to fire this tick; clears the request. */
   boolean consumeFireRequest() {
     boolean r = fireRequested;
     fireRequested = false;
     return r;
   }
 
+  boolean wantsHealth() {
+    return isAlive() && health < maxHealth;
+  }
+
   @Override
   public void damage(double amount) {
-    if (dead() || invulnerable() || amount <= 0) {
+    if (!isAlive() || invulnerableTimer > 0) {
       return;
     }
     super.damage(amount);
-    if (dead()) {
+    if (!isAlive()) {
       firing = false;
       respawnTimer = GameConfig.RESPAWN_DELAY;
     } else {
-      // Surviving a hit buys a short i-frame, so a ring of enemies cannot all land on one tick.
-      // Never shortens an immunity already running.
       invulnerableTimer = Math.max(invulnerableTimer, GameConfig.HIT_INVULNERABILITY);
     }
   }
@@ -246,20 +127,12 @@ final class ServerPlayer extends Actor {
     pos = spawn;
     health = maxHealth;
     alive = true;
-    reloadTimer = 0;
-    refillAllMagazines();
+    loadout.restock();
     invulnerableTimer = GameConfig.RESPAWN_INVULNERABILITY;
   }
 
   EntityState toEntityState() {
-    return new EntityState(
-        id,
-        "cat",
-        pos.x,
-        pos.y,
-        (float) facing,
-        (float) health,
-        weapon.id(),
-        (float) invulnerableTimer);
+    return new EntityState(id, EntityKind.CAT, pos.x, pos.y, (float) facing, (float) health,
+        loadout.weapon().id(), (float) invulnerableTimer);
   }
 }

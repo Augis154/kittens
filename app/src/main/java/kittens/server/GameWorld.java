@@ -3,9 +3,6 @@ package kittens.server;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ThreadLocalRandom;
 import kittens.common.GameConfig;
 import kittens.common.entity.Enemy;
@@ -18,23 +15,22 @@ import kittens.common.sim.PathField;
 import kittens.common.weapon.Weapon;
 
 /**
- * The authoritative simulation: connected players, computer-controlled enemies, live projectiles,
- * scattered pickups and the map. One {@link #tick(double)} advances the world by a fixed step;
- * {@link #snapshotFor(int)} freezes it for the wire. No sockets or threading policy here —
- * {@code Server} owns those.
+ * The authoritative simulation, a Facade over players, enemies, projectiles, pickups and the map.
+ * Everything is mutated on the loop thread except {@link #addPlayer}/{@link #removePlayer}, which
+ * arrive from reader threads — hence only {@code players} is a concurrent collection.
  */
 final class GameWorld {
   private final TileMap map;
   private final ConcurrentHashMap<Integer, ServerPlayer> players = new ConcurrentHashMap<>();
-  private final ConcurrentHashMap<Integer, Enemy> enemies = new ConcurrentHashMap<>();
-  private final ConcurrentLinkedQueue<Projectile> projectiles = new ConcurrentLinkedQueue<>();
-  private final ConcurrentLinkedQueue<Explosion> explosions = new ConcurrentLinkedQueue<>();
-  private final ConcurrentLinkedQueue<Pickup> pickups = new ConcurrentLinkedQueue<>();
-  private final AtomicInteger nextProjectileId = new AtomicInteger(GameConfig.PROJECTILE_ID_BASE);
-  private final AtomicInteger nextExplosionId = new AtomicInteger(GameConfig.EXPLOSION_ID_BASE);
-  private final AtomicLong tick = new AtomicLong();
+  private final List<Enemy> enemies = new ArrayList<>();
+  private final List<Projectile> projectiles = new ArrayList<>();
+  private final List<Explosion> explosions = new ArrayList<>();
+  private final List<Pickup> pickups = new ArrayList<>();
   private final SpawnDirector spawnDirector = new SpawnDirector();
   private final PickupDirector pickupDirector = new PickupDirector();
+  private int nextProjectileId = GameConfig.PROJECTILE_ID_BASE;
+  private int nextExplosionId = GameConfig.EXPLOSION_ID_BASE;
+  private long tick;
 
   GameWorld(TileMap map) {
     this.map = map;
@@ -42,8 +38,7 @@ final class GameWorld {
 
   void addPlayer(int id) {
     List<Vec2> spawns = map.spawnPoints();
-    Vec2 spawn = spawns.get(Math.floorMod(id, spawns.size()));
-    players.put(id, new ServerPlayer(id, spawn));
+    players.put(id, new ServerPlayer(id, spawns.get(Math.floorMod(id, spawns.size()))));
   }
 
   void removePlayer(int id) {
@@ -57,166 +52,125 @@ final class GameWorld {
     }
   }
 
+  /** One fixed step: players, fire, pickups, spawns, enemies, projectiles, blasts, cull. */
   void tick(double dt) {
-    tick.incrementAndGet();
+    tick++;
 
-    // 1. Advance players and handle user inputs
     for (ServerPlayer p : players.values()) {
       p.tick(dt, map);
     }
-
-    // 2. Process player weapon fire
     for (ServerPlayer p : players.values()) {
       if (p.consumeFireRequest()) {
         fire(p);
       }
     }
 
-    // 3. Age pickups and hand out any a player is now standing on, then scatter fresh ones
     for (Pickup pk : pickups) {
-      pk.update(dt);
+      pk.tick(dt);
       for (ServerPlayer p : players.values()) {
         if (pk.tryCollect(p)) {
           break;
         }
       }
     }
-    List<Pickup> newPickups = new ArrayList<>();
-    pickupDirector.tick(dt, map, players.values(), pickups, newPickups);
-    pickups.addAll(newPickups);
-
-    // 4. Update spawn director and add newly spawned enemies
-    List<Enemy> newEnemies = new ArrayList<>();
-    spawnDirector.tick(dt, map, players.values(), enemies.values(), newEnemies);
-    for (Enemy enemy : newEnemies) {
-      enemies.put(enemy.id(), enemy);
+    Pickup dropped = pickupDirector.tick(dt, map, players.values(), pickups);
+    if (dropped != null) {
+      pickups.add(dropped);
     }
 
-    // 5. Update computer-controlled enemies, routed around walls by one shared path field
+    Enemy spawned = spawnDirector.tick(dt, map, players.values(), enemies);
+    if (spawned != null) {
+      enemies.add(spawned);
+    }
     if (!enemies.isEmpty()) {
-      PathField pursuit = PathField.toward(map, huntedPositions());
-      for (Enemy enemy : enemies.values()) {
-        enemy.tick(dt, map, pursuit, players.values(), enemies.values());
+      // One field per tick, shared by every enemy: cheaper than caching it correctly, never stale.
+      PathField pursuit = PathField.toward(map, alivePlayerPositions());
+      for (Enemy enemy : enemies) {
+        enemy.tick(dt, map, pursuit, players.values(), enemies);
       }
     }
 
-    // 6. Update projectiles and check collisions with map, players, and enemies
     for (Projectile pr : projectiles) {
-      pr.tick(dt, map, players.values(), enemies.values());
+      pr.tick(dt, map, players.values(), enemies);
     }
-
-    // 7. Detonate explosive projectiles that just died (bazooka AOE)
     for (Projectile pr : projectiles) {
       if (pr.consumeExplosion()) {
-        explode(pr.pos(), pr.explosionRadius(), pr.explosionDamage(), pr.ownerId());
+        explode(pr.pos(), pr.weapon());
       }
     }
-
-    // 8. Age blast markers, cull dead projectiles / enemies / explosions / pickups
     for (Explosion ex : explosions) {
       ex.tick(dt);
     }
-    projectiles.removeIf(pr -> !pr.alive());
-    enemies.values().removeIf(Enemy::isDead);
-    explosions.removeIf(ex -> !ex.alive());
+
+    projectiles.removeIf(pr -> !pr.isAlive());
+    enemies.removeIf(e -> !e.isAlive());
+    explosions.removeIf(ex -> !ex.isAlive());
     pickups.removeIf(pk -> !pk.isAlive());
   }
 
-  /**
-   * The positions enemies are hunting — every living player. Rebuilt each tick: one breadth-first
-   * pass over a few hundred tiles is far cheaper than caching it correctly, and it means the routes
-   * are never a tick stale.
-   */
-  private List<Vec2> huntedPositions() {
+  private List<Vec2> alivePlayerPositions() {
     List<Vec2> goals = new ArrayList<>(players.size());
     for (ServerPlayer p : players.values()) {
-      if (!p.dead()) {
+      if (p.isAlive()) {
         goals.add(p.pos());
       }
     }
     return goals;
   }
 
-  /** Area-of-effect blast: full damage at the centre, easing to a quarter at the rim. */
-  private void explode(Vec2 center, float radius, double peakDamage, int ownerId) {
+  /** Area blast: full damage at the centre easing to a quarter at the rim, plus outward knockback. */
+  private void explode(Vec2 center, Weapon weapon) {
+    float radius = weapon.explosionRadius();
     float radiusSq = radius * radius;
-
-    for (Enemy enemy : enemies.values()) {
-      if (!enemy.isAlive()) {
-        continue;
-      }
+    for (Enemy enemy : enemies) {
       Vec2 diff = enemy.pos().sub(center);
       float distSq = diff.lengthSq();
-      if (distSq <= radiusSq) {
-        enemy.damage(peakDamage * falloff(distSq, radius));
-        if (distSq > 1e-3f) {
-          enemy.applyKnockback(
-              diff.normalized().scale(GameConfig.PROJECTILE_KNOCKBACK * 1.6f));
-        }
+      if (!enemy.isAlive() || distSq > radiusSq) {
+        continue;
+      }
+      enemy.damage(weapon.explosionDamage() * falloff(distSq, radius));
+      if (distSq > 1e-3f) {
+        enemy.applyKnockback(diff.normalized().scale(GameConfig.PROJECTILE_KNOCKBACK * 1.6f));
       }
     }
-
     if (GameConfig.FRIENDLY_FIRE) {
       for (ServerPlayer p : players.values()) {
-        if (p.dead()) {
-          continue;
-        }
-        Vec2 diff = p.pos().sub(center);
-        float distSq = diff.lengthSq();
-        if (distSq <= radiusSq) {
-          p.damage(peakDamage * falloff(distSq, radius));
+        float distSq = p.pos().sub(center).lengthSq();
+        if (p.isAlive() && distSq <= radiusSq) {
+          p.damage(weapon.explosionDamage() * falloff(distSq, radius));
         }
       }
     }
-
-    explosions.add(new Explosion(nextExplosionId.getAndIncrement(), center, radius));
+    explosions.add(new Explosion(nextExplosionId++, center, radius));
   }
 
   private static double falloff(float distSq, float radius) {
-    float frac = 1f - (float) Math.sqrt(distSq) / radius; // 1 at centre -> 0 at edge
-    return Math.max(0.25f, frac);
+    return Math.max(0.25f, 1f - (float) Math.sqrt(distSq) / radius);
   }
 
   private void fire(ServerPlayer shooter) {
-    Weapon w = shooter.weapon();
+    Weapon w = shooter.loadout().weapon();
     float base = shooter.aimAngle();
-    Vec2 muzzle =
-        shooter
-            .pos()
-            .add(
-                Vec2.of((float) Math.cos(base), (float) Math.sin(base))
-                    .scale(GameConfig.PLAYER_SIZE * 0.5f + 4f));
+    Vec2 aim = Vec2.fromAngle(base);
+    Vec2 muzzle = shooter.pos().add(aim.scale(GameConfig.PLAYER_SIZE * 0.5f + 4f));
     ThreadLocalRandom rnd = ThreadLocalRandom.current();
     for (int pellet = 0; pellet < w.pellets(); pellet++) {
-      float angle =
-          w.spread() > 0f ? base + (float) rnd.nextDouble(-w.spread(), w.spread()) : base;
-      projectiles.add(
-          new Projectile(nextProjectileId.getAndIncrement(), shooter.id(), muzzle, angle, w));
+      float angle = w.spread() > 0f ? base + (float) rnd.nextDouble(-w.spread(), w.spread()) : base;
+      projectiles.add(new Projectile(nextProjectileId++, shooter.id(), muzzle, angle, w));
     }
-
-    // Recoil: shove the shooter backwards, opposite the aim.
     if (w.recoil() > 0f) {
-      shooter.applyKnockback(
-          Vec2.of(-(float) Math.cos(base), -(float) Math.sin(base)).scale(w.recoil()));
+      shooter.applyKnockback(aim.scale(-w.recoil()));
     }
   }
 
-  /**
-   * The world as {@code viewerId} should see it: entity states plus the last input seq the server
-   * has applied for that viewer, so their client can reconcile its prediction.
-   */
+  /** The world as {@code viewerId} sees it: all entities plus that viewer's ack and ammo. */
   Snapshot snapshotFor(int viewerId) {
-    List<EntityState> entities =
-        new ArrayList<>(
-            players.size()
-                + enemies.size()
-                + projectiles.size()
-                + explosions.size()
-                + pickups.size());
+    List<EntityState> entities = new ArrayList<>(players.size() + enemies.size()
+        + projectiles.size() + explosions.size() + pickups.size());
     for (ServerPlayer p : players.values()) {
       entities.add(p.toEntityState());
     }
-    for (Enemy enemy : enemies.values()) {
+    for (Enemy enemy : enemies) {
       entities.add(enemy.toEntityState());
     }
     for (Projectile pr : projectiles) {
@@ -229,13 +183,10 @@ final class GameWorld {
       entities.add(pk.toEntityState());
     }
     ServerPlayer viewer = players.get(viewerId);
-    long ackSeq = viewer == null ? -1 : viewer.lastProcessedSeq();
-    int ammo = viewer == null ? 0 : viewer.magAmmo();
-    float reload = viewer == null ? 0f : viewer.reloadProgress();
-    return new Snapshot(tick.get(), ackSeq, entities, ammo, reload);
-  }
-
-  String mapId() {
-    return GameConfig.MAP_ID;
+    if (viewer == null) {
+      return new Snapshot(tick, -1, entities, 0, 0f);
+    }
+    return new Snapshot(tick, viewer.lastProcessedSeq(), entities, viewer.loadout().ammo(),
+        viewer.loadout().reloadProgress());
   }
 }

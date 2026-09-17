@@ -16,7 +16,11 @@ intent. Two constraints from it shape everything here:
 2. **23 OOP design patterns must eventually be implemented**, added gradually over months. The
    prototype is deliberately pattern-free, written to leave *seams* where patterns will later go.
    **Do not refactor code into design patterns unless asked.** Keeping the core free of rendering
-   and socket code is the thing that preserves those seams.
+   and socket code is the thing that preserves those seams. Where a pattern already fell out of
+   the structure it is named in that class's comment (Template Method / Strategy seam in `Enemy`,
+   Singleton registry in `Weapon`, Command in `InputCommand`, Facade in `GameWorld`, Game Loop in
+   `ServerLoop`, Flyweight cache in `AssetManager`, Factory in `SpawnDirector`); leave those
+   labels accurate when touching the class.
 
 ## Keeping this file current
 
@@ -89,7 +93,9 @@ To *see* the client instead of measuring it, don't try to screen-grab: under WSL
 window is black, so `ffmpeg -f x11grab` captures nothing. Render the panel offscreen instead — build
 a `Client` on the EDT, `setSize` it to its preferred size, and `paint()` it into a `BufferedImage`.
 No window ever has to be shown. Such a probe needs `package kittens.client` for `GameClient`, and
-Gson on the classpath — easiest via `./gradlew installDist` and `app/build/install/app/lib/*`.
+Gson on the classpath — `find ~/.gradle/caches -name 'gson-*.jar'` finds the jar Gradle already
+downloaded. The server can run in the same JVM (`Server.main` on a daemon thread), and
+`GameClient.latest()` gives the probe the authoritative position to assert against.
 
 Driving that panel has two non-obvious requirements. Add it to a `JFrame` and `pack()` it (still
 never shown): `MouseEvent`'s constructor calls `getLocationOnScreen`, which needs a peer. And feed
@@ -100,18 +106,23 @@ are silently dropped and the kitten never moves while the rest of the frame look
 ## Architecture
 
 Three packages under `app/src/main/java/kittens/`, with a hard rule: **`common` contains no
-rendering and no socket code.** It is the shared simulation both sides run.
+rendering, and the only socket code in it is `common/net/MessageChannel`** — the one place that
+knows the wire is newline-delimited JSON over TCP, used by both ends. Everything else in `common`
+is the shared simulation both sides run.
 
 - **`common/`** — `math/` (`Vec2`, `Aabb`), `map/` (`TileMap`, `Tile`), `entity/`
   (`GameObject` → `Actor` → `Enemy` → `Rat`/`Mouse`), `weapon/`
-  (`Weapon` → `Pistol`/`Shotgun`/`Rifle`/`Bazooka`), `sim/` (`PlayerMotion`, `PathField`),
-  `net/` (the DTOs), `GameConfig`.
-- **`server/`** — `Server` (socket accept), `ClientConnection`, `ServerLoop`, `GameWorld`,
-  `ServerPlayer`, `Projectile`, `Explosion`, `Pickup`, `SpawnDirector`, `PickupDirector`.
-- **`client/`** — `GameClient` (networking), `Client` (window, input, prediction, frame loop),
-  `Camera` (viewport, follow, world/screen conversion), `WorldView` (between-snapshot smoothing +
-  cosmetic effects), `Renderer` (arena drawing), `Hud` (screen-space overlay), `Theme` (palette,
-  fonts, panel/text primitives), `AssetManager`.
+  (`Weapon` → `Pistol`/`Shotgun`/`Rifle`/`Bazooka`), `sim/` (`Motion`, `PathField`),
+  `net/` (the DTOs, `EntityKind`, `MessageCodec`, `MessageChannel`), `GameConfig`.
+- **`server/`** — `Server` (accept loop + per-client reader threads), `ServerLoop`, `GameWorld`,
+  `ServerPlayer` + `Loadout` (weapon, magazines, reload), `Projectile`, `Explosion`, `Pickup`,
+  `SpawnDirector`, `PickupDirector`.
+- **`client/`** — `GameClient` (networking; publishes each snapshot as an immutable `Frame`),
+  `Client` (window, timers, scene assembly), `InputHandler` (keys, mouse, cursor), `Predictor`
+  (local-player prediction and reconciliation), `Camera` (viewport, follow, world/screen
+  conversion), `WorldView` (between-snapshot smoothing + cosmetic effects), `Renderer` (arena
+  drawing), `Hud` (screen-space overlay), `Theme` (palette, fonts, panel/text primitives),
+  `AssetManager`.
 
 ### Levels
 
@@ -138,20 +149,22 @@ Each tick `GameWorld.tick(dt)` runs a fixed pipeline — players → weapon fire
 director → enemies → projectiles → explosion detonation → cull — then `Server.tick` sends **one
 snapshot per client**, because `ackSeq`, `viewerAmmo`, and `viewerReload` are all recipient-specific.
 
-`Client` renders at 180 FPS but sends input at exactly `TICK_HZ`. It predicts the local player by
-applying input immediately to its own copy of the movement model, then on each new snapshot
+`Client` renders at 180 FPS but sends input at exactly `TICK_HZ`. `Predictor` applies input to
+the local player immediately, then on each new snapshot (detected by the `Frame`'s tick changing)
 re-anchors to the authoritative position and replays inputs the server hasn't acked, easing small
 errors and hard-snapping past a threshold.
 
 Everything the local player does *not* control is smoothed by `WorldView` instead: remote players
 and enemies are eased exponentially toward their snapshot positions, and bullets are dead-reckoned
 from their angle and weapon speed. The split matters — prediction is reconciled against authority
-and lives in `Client`, while `WorldView` is cosmetic and can be retuned without desync risk.
+and lives in `Predictor`, while `WorldView` is cosmetic and can be retuned without desync risk.
 
-**The critical invariant:** `common/sim/PlayerMotion` is the *single* movement model, run by both
-`ServerPlayer.tick` and `Client`'s predictor with the same fixed `1.0 / TICK_HZ` step. It must stay
-pure and deterministic. Any divergence — a different timestep, a stray random, an extra force
-applied on one side only — surfaces as unexplained rubber-banding, not as an obvious failure.
+**The critical invariant:** `common/sim/Motion` is the *single* movement model. Its player overload
+is run by both `ServerPlayer.tick` and `Predictor` with the same fixed `GameConfig.TICK_DT` step,
+and must stay pure and deterministic. Any divergence — a different timestep, a stray random, an
+extra force applied on one side only — surfaces as unexplained rubber-banding, not as an obvious
+failure. Enemies use the same `Motion.step` with a blocker predicate that also refuses living
+players; that path is server-only, so it is free to change.
 
 ### Wire protocol
 
@@ -161,9 +174,11 @@ records: `Join`, `JoinAccepted`, `InputCommand`, `Snapshot`. `MessageCodec` wrap
 
 `EntityState` is one flat render-ready row. Two conventions to know:
 
-- `kind` is a sprite tag: `"cat"`, `"rat"`, `"mouse"`, `"bullet"`, `"boom"`, `"health"`, `"ammo"`.
-- **Two kinds overload the fields** rather than widening the record for everyone: for `"boom"`,
-  `angle` carries the current expanding radius and `hp` the final radius; for `"health"`/`"ammo"`,
+- `kind` is the `EntityKind` enum (`CAT`, `RAT`, `MOUSE`, `BULLET`, `BOOM`, `HEALTH`, `AMMO`),
+  serialized by name. Its `isEnemy()`/`isPickup()`/`isActor()` are the only way code should ask
+  "what sort of thing is this"; `sprite()` is the lower-case resource name.
+- **Two kinds overload the fields** rather than widening the record for everyone: for `BOOM`,
+  `angle` carries the current expanding radius and `hp` the final radius; for `HEALTH`/`AMMO`,
   `hp` carries the pickup's remaining lifetime in seconds. Both are read only for presentation. A
   third overload is the point at which this wants a better shape.
 
@@ -173,14 +188,18 @@ the wire stays consistent automatically.
 
 ### Threading
 
-- **Server:** main thread accepts sockets; one reader thread per client (`client-<id>`) decodes
-  messages and queues inputs into `ServerPlayer.inbox` (a `ConcurrentLinkedQueue`); the
-  `server-loop` thread drains them and owns all mutation. Concurrent collections in `GameWorld`
-  exist because `addPlayer`/`removePlayer` arrive from reader threads.
+- **Server:** main thread accepts sockets; one reader thread per client (`client-<id>`) runs
+  `MessageChannel.readLoop` and queues inputs into `ServerPlayer.inbox` (a
+  `ConcurrentLinkedQueue`); the `server-loop` thread drains them and owns all mutation.
+  `GameWorld.players` is the only concurrent collection, because `addPlayer`/`removePlayer` arrive
+  from reader threads; enemies, projectiles, explosions and pickups are plain lists touched by the
+  loop thread only. Keep it that way — adding a concurrent collection there implies a threading
+  rule that does not exist.
 - **Snapshot writes happen on the loop thread** and end in a blocking `flush()`. A merely *slow*
   client (full TCP window, not disconnected) will stall the whole simulation. A per-connection
   outbound queue is the fix if this ever bites.
-- **Client:** the `client-net` reader thread writes into a `ConcurrentHashMap` and volatile fields;
+- **Client:** the `client-net` reader thread publishes each snapshot as one immutable
+  `GameClient.Frame` through a single volatile, so a render frame never sees half a snapshot;
   everything else (input state, prediction, rendering) is Swing EDT only, driven by two `Timer`s.
 
 ### Enemy AI
@@ -210,19 +229,20 @@ Two rules are worth knowing before touching them:
 
 - **A pickup is only consumed if it would do something.** A kitten at full health walks over a
   medkit; one with every magazine full walks over a crate. `Pickup.tryCollect` asks
-  `ServerPlayer.wantsHealth`/`wantsAmmo` first, and kills the pickup the moment it is taken so two
-  players cannot share one. Collection is box overlap, not a radius.
+  `ServerPlayer.wantsHealth`/`Loadout.wantsAmmo` first, and kills the pickup the moment it is taken
+  so two players cannot share one. Collection is box overlap, not a radius.
 - **Reserve ammo is unlimited**, so what an ammo crate actually buys is the reload it skips —
-  `restockAmmo` tops up every magazine *and* cancels a reload in flight.
+  `Loadout.restock` tops up every magazine *and* cancels a reload in flight.
 
 ### Collision
 
-- **Actors vs walls:** axis-separated sliding with a binary search for the largest clear fraction, so
-  an actor ends flush against the wall (`PlayerMotion.moveAxis`; `Enemy` has its own near-copy that
-  also treats players as blockers).
+- **Actors vs walls:** axis-separated sliding with a bisection for the largest clear fraction, so
+  an actor ends flush against the obstacle (`Motion.step`, parameterised by a blocker predicate:
+  walls for players, walls-or-living-players for enemies). `Motion.largestClear` is that bisection
+  on its own, and `Projectile` reuses it for wall impacts.
 - **Projectiles:** *swept*, not point-sampled. Each tick tests the whole segment travelled — a
   ray/slab test against target boxes grown by the round's half-size, plus half-tile sampling for
-  walls refined by binary search. This matters: at 30 Hz a rifle round covers ~17 px per tick, wider
+  walls refined by bisection. This matters: at 30 Hz a rifle round covers ~17 px per tick, wider
   than a mouse, so an endpoint-only test would shoot straight through small enemies and over anything
   touching the shooter. When changing this, keep the step capped at the round's remaining life or
   every weapon silently gains range.
@@ -239,9 +259,9 @@ Two rules are worth knowing before touching them:
   in world coordinates, then restores the transform and hands `Hud` the native window size so HUD
   text stays crisp. Do not reimplement the arithmetic: use `Camera.worldX`/`worldY`, which are exact
   inverses of `Camera.apply`.
-- **Only the cursor's *screen* position is state.** `Client` stores `screenMouseX/screenMouseY` and
-  derives the world position through the camera on demand. A cached world cursor position would go
-  stale the moment the camera panned, dragging the aim off the crosshair with it.
+- **Only the cursor's *screen* position is state.** `InputHandler` stores `mouseX/mouseY` and
+  `Client` derives the world position through the camera on demand. A cached world cursor position
+  would go stale the moment the camera panned, dragging the aim off the crosshair with it.
 - **The map is bigger than the window, so tile drawing is culled.** `Camera.visibleTiles()` produces
   the `Renderer.Tiles` block carried on the `Scene`, and both map passes iterate only that. Anything
   new that walks the whole grid per frame will cost ~4x more than it needs to.
@@ -264,17 +284,21 @@ Two rules are worth knowing before touching them:
 - Player damage immunity (spawn grace and the post-hit i-frame) shares one timer on `ServerPlayer`
   and is surfaced per-entity as `invulnerableFor` so teammates can see who is protected. All damage
   funnels through `ServerPlayer.damage`, so new damage sources get it for free.
+- **One liveness flag.** `GameObject.isAlive()` is the only way to ask whether anything is still in
+  play; `Actor.damage` clears it at zero health and `ServerPlayer.respawn` sets it back. Knockback
+  likewise lives once, on `Actor` (`applyKnockback`/`decayKnockback`), for players and enemies alike.
+- **Comments say why, not what.** The essays are gone on purpose; add a comment only for a
+  non-obvious trade-off or trap, and keep the pattern labels (see the constraint at the top).
 
 ## Known rough edges
 
 Not bugs to fix on sight — context so you don't mistake them for accidents:
 
-- **`Client` still owns input.** Rendering is out (`Renderer`, `Hud`, `WorldView`), leaving ~375
-  lines of window setup, key/mouse handling, prediction, and the frame loop. The design brief also
-  asks for an `InputHandler` and `Screen` states (`MainMenu` / `Lobby` / `InGame`); neither exists,
-  so there is no menu and no lobby — a client joins the match the moment it connects.
-- **Wave state never reaches the client.** `SpawnDirector.currentWave()` and `isWaveInProgress()`
-  have no callers; nothing displays the wave number or intermission.
+- **No menu, no lobby.** The design brief asks for `Screen` states (`MainMenu` / `Lobby` /
+  `InGame`); none exist, so a client joins the match the moment it connects. `Join.clientName` and
+  `JoinAccepted.mapId` are carried on the wire but read by nobody — they are the seam for that.
+- **Wave state never reaches the client.** `SpawnDirector`'s wave number and intermission are
+  private fields with no accessor; nothing displays them.
 - **Enemies and players share the `S` tiles.** There is no separate enemy-spawn glyph, so waves can
   only enter where players also spawn, and `SpawnDirector.MIN_SPAWN_DIST` is the only thing keeping
   them out of the room the players are standing in. A level that wants waves to arrive from a chosen

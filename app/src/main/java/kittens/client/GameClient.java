@@ -1,130 +1,79 @@
 package kittens.client;
 
-import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
-import java.net.Socket;
-import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
 import kittens.common.net.EntityState;
 import kittens.common.net.InputCommand;
 import kittens.common.net.Join;
 import kittens.common.net.JoinAccepted;
 import kittens.common.net.Message;
-import kittens.common.net.MessageCodec;
+import kittens.common.net.MessageChannel;
 import kittens.common.net.Snapshot;
 
 /**
- * The client's network half: connects, sends {@link Join} then a stream of {@link InputCommand}s,
- * and exposes the latest {@link Snapshot} (entities + input ack) for the renderer and predictor.
+ * The client's network half: joins, streams {@link InputCommand}s, and publishes the latest
+ * snapshot as one immutable {@link Frame} so the EDT always reads a consistent picture.
  */
 final class GameClient {
-  private final BufferedReader in;
-  private final BufferedWriter out;
-  private final AtomicLong inputSeq = new AtomicLong();
+  /** One received snapshot, indexed by entity id. */
+  record Frame(long tick, long ackSeq, int ammo, float reload, Map<Integer, EntityState> entities) {
+    static final Frame EMPTY = new Frame(-1, -1, 0, 0f, Map.of());
 
+    static Frame of(Snapshot s) {
+      Map<Integer, EntityState> byId = new LinkedHashMap<>();
+      for (EntityState e : s.entities()) {
+        byId.put(e.id(), e);
+      }
+      return new Frame(s.tick(), s.ackSeq(), s.viewerAmmo(), s.viewerReload(),
+          Collections.unmodifiableMap(byId));
+    }
+
+    /** The entity with this id, or {@code null}. */
+    EntityState entity(int id) {
+      return entities.get(id);
+    }
+  }
+
+  private final MessageChannel channel;
+  private long inputSeq; // EDT only
   private volatile int myPlayerId = -1;
-  private final Map<Integer, EntityState> entities = new ConcurrentHashMap<>();
-  private volatile long ackSeq = -1;
-  private volatile int viewerAmmo = 0;
-  private volatile float viewerReload = 0f;
-  private final AtomicLong snapshotVersion = new AtomicLong();
+  private volatile Frame latest = Frame.EMPTY;
 
   GameClient(String host, int port) throws IOException {
-    Socket socket = new Socket(host, port);
-    socket.setTcpNoDelay(true);
-    in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
-    out = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
+    channel = MessageChannel.connect(host, port);
   }
 
   void start() {
-    send(new Join("kitten"));
-    Thread reader = new Thread(this::readLoop, "client-net");
+    channel.send(new Join("kitten"));
+    Thread reader = new Thread(() -> channel.readLoop(this::handle), "client-net");
     reader.setDaemon(true);
     reader.start();
   }
 
+  /** -1 until the server accepts the join. */
   int myPlayerId() {
     return myPlayerId;
   }
 
-  Map<Integer, EntityState> entities() {
-    return entities;
+  Frame latest() {
+    return latest;
   }
 
-  /** Seq of the last input the server has confirmed applying for us. */
-  long ackSeq() {
-    return ackSeq;
-  }
-
-  /** Bumps on every snapshot; the predictor reconciles when it changes. */
-  long snapshotVersion() {
-    return snapshotVersion.get();
-  }
-
-  /** Rounds left in the local player's current weapon magazine. */
-  int viewerAmmo() {
-    return viewerAmmo;
-  }
-
-  /** 0 when the local player is ready to fire; otherwise reload progress in (0, 1]. */
-  float viewerReload() {
-    return viewerReload;
-  }
-
-  /** Send the current intent and return the command (its {@code seq} is needed for replay). */
-  InputCommand sendInput(
-      float moveX, float moveY, float aimAngle, boolean firing, int weaponId, boolean reload) {
-    InputCommand cmd = new InputCommand(
-        moveX, moveY, aimAngle, firing, weaponId, reload, inputSeq.getAndIncrement());
-    send(cmd);
+  /** Sends the current intent; the returned command's {@code seq} is what the predictor remembers. */
+  InputCommand sendInput(float moveX, float moveY, float aimAngle, boolean firing, int weaponId,
+      boolean reload) {
+    InputCommand cmd = new InputCommand(moveX, moveY, aimAngle, firing, weaponId, reload, inputSeq++);
+    channel.send(cmd);
     return cmd;
-  }
-
-  private synchronized void send(Message message) {
-    try {
-      out.write(MessageCodec.encode(message));
-      out.write('\n');
-      out.flush();
-    } catch (IOException e) {
-      System.err.println("send failed: " + e);
-    }
-  }
-
-  private void readLoop() {
-    try {
-      String line;
-      while ((line = in.readLine()) != null) {
-        if (!line.isBlank()) {
-          handle(MessageCodec.decode(line));
-        }
-      }
-    } catch (IOException e) {
-      System.err.println("connection closed: " + e);
-    }
   }
 
   private void handle(Message message) {
     switch (message) {
       case JoinAccepted accepted -> myPlayerId = accepted.playerId();
-      case Snapshot snapshot -> {
-        entities.keySet().retainAll(
-            snapshot.entities().stream().map(EntityState::id).toList());
-        for (EntityState e : snapshot.entities()) {
-          entities.put(e.id(), e);
-        }
-        ackSeq = snapshot.ackSeq();
-        viewerAmmo = snapshot.viewerAmmo();
-        viewerReload = snapshot.viewerReload();
-        snapshotVersion.incrementAndGet();
-      }
-      default -> {
-        // Join / InputCommand are client -> server only.
-      }
+      case Snapshot snapshot -> latest = Frame.of(snapshot);
+      default -> {} // Join / InputCommand only travel the other way
     }
   }
 }

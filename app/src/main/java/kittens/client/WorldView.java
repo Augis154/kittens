@@ -7,138 +7,99 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import kittens.common.GameConfig;
+import kittens.common.math.Vec2;
+import kittens.common.net.EntityKind;
 import kittens.common.net.EntityState;
 import kittens.common.weapon.Weapon;
 
 /**
- * Presentation-side smoothing of everything the local player does <em>not</em> control: remote
- * kittens and enemies are eased toward their snapshot positions, projectiles are dead-reckoned
- * between snapshots, and health drops are turned into hit flashes and floating damage numbers. It
- * also spots pickups disappearing so a collection reads as a pop rather than a sprite blinking out.
- *
- * <p>None of this is authoritative and none of it feeds prediction — {@link Client} owns the local
- * player's predicted position, which is reconciled against the server rather than smoothed. This
- * class exists purely so {@link Renderer} has something to draw between the 30 Hz snapshots, so it
- * may be retuned freely; nothing here can desync the simulation.
+ * Cosmetic smoothing of everything the local player does <em>not</em> control: remote actors are
+ * eased toward their snapshot positions, bullets are dead-reckoned between snapshots, and health
+ * drops and vanishing pickups become effects. Nothing here feeds prediction, so it can be retuned
+ * freely without desync risk.
  */
 final class WorldView {
-  /** Per-frame easing of remote entities toward their snapshot position. */
   private static final float REMOTE_SMOOTHING = 0.30f;
-
-  /** Per-frame easing of a projectile toward its snapshot position. */
   private static final float BULLET_SMOOTHING = 0.25f;
-
-  /** Distance (px) past which a projectile snaps to authority instead of easing toward it. */
   private static final float BULLET_SNAP = 48f;
-
-  /** Seconds an enemy stays lit up after taking a hit. */
   private static final float HIT_FLASH_SECONDS = 0.14f;
-
-  /** One server tick — how stale a projectile's first snapshot already is when we see it. */
-  private static final double TICK_DT = 1.0 / GameConfig.TICK_HZ;
-
   /**
-   * Life (seconds) a vanished pickup must still have had for its disappearance to count as somebody
-   * collecting it. One that simply expired was last seen with under a tick left, so anything well
-   * above that was taken — a couple of ticks of slack in case a snapshot is late.
+   * A pickup that vanished with more life than this left was collected, not expired — an expired
+   * one is last seen with under a tick on the clock.
    */
   private static final float PICKUP_TAKEN_LIFE = 0.3f;
 
-  /** A short-lived cosmetic effect in world space. Client-only: never sent, never simulated. */
+  /** A dead-reckoned projectile. */
+  record Bullet(Vec2 pos, float angle, Weapon weapon) {
+    Bullet moved(double dt) {
+      return new Bullet(pos.add(Vec2.fromAngle(angle).scale((float) (weapon.projectileSpeed() * dt))),
+          angle, weapon);
+    }
+  }
+
+  /** A short-lived world-space effect. Client-only: never sent, never simulated. */
   static final class Fx {
     enum Kind {
-      /** Barrel flash where a round was fired. */
       MUZZLE,
-      /** Expanding ring on an enemy that just took damage. */
       HIT,
-      /** Floating damage number drifting off the enemy that took the hit. */
       DAMAGE,
-      /** Ring popping outward where a pickup was collected. */
       PICKUP
     }
 
-    private final Kind kind;
-    private float x;
-    private float y;
-    private final float angle;
-    private final int value;
+    final Kind kind;
+    final float angle;
+    /** Damage dealt for {@link Kind#DAMAGE}. */
+    final int amount;
+    /** An explosive muzzle flash, or a medkit rather than an ammo crate. */
+    final boolean accent;
     private final float maxLife;
-    private float life;
+    Vec2 pos;
+    float life;
 
-    private Fx(Kind kind, float x, float y, float angle, int value, float life) {
+    private Fx(Kind kind, Vec2 pos, float angle, int amount, boolean accent, float life) {
       this.kind = kind;
-      this.x = x;
-      this.y = y;
+      this.pos = pos;
       this.angle = angle;
-      this.value = value;
+      this.amount = amount;
+      this.accent = accent;
       this.maxLife = life;
       this.life = life;
     }
 
-    Kind kind() {
-      return kind;
-    }
-
-    float x() {
-      return x;
-    }
-
-    float y() {
-      return y;
-    }
-
-    float angle() {
-      return angle;
-    }
-
-    /**
-     * Damage amount for {@link Kind#DAMAGE}; 1 marks an explosive muzzle flash, and for
-     * {@link Kind#PICKUP} a medkit rather than an ammo crate.
-     */
-    int value() {
-      return value;
-    }
-
-    /** 1 when the effect has just started, easing to 0 as it expires. */
+    /** 1 when just started, easing to 0 as it expires. */
     float progress() {
       return Math.clamp(life / maxLife, 0f, 1f);
     }
   }
 
-  // Remote entities (players & enemies): interpolated on-screen position per id -> {x, y}.
-  private final Map<Integer, float[]> remotePos = new HashMap<>();
+  private record PickupSeen(Vec2 pos, float life, boolean health) {}
 
-  // Client-simulated projectiles: id -> {x, y, angle, vx, vy, weaponId} for smooth flight.
-  private final Map<Integer, float[]> bullets = new HashMap<>();
-
-  // Pickups: last {x, y, life, isHealth} seen per id, so one vanishing can be told from expiring.
-  private final Map<Integer, float[]> pickupSeen = new HashMap<>();
-
-  // Hit feedback: last health seen per enemy, and how long each one stays lit after losing some.
+  private final Map<Integer, Vec2> smoothed = new HashMap<>();
+  private final Map<Integer, Bullet> bullets = new HashMap<>();
+  private final Map<Integer, PickupSeen> pickupSeen = new HashMap<>();
   private final Map<Integer, Float> enemyHp = new HashMap<>();
   private final Map<Integer, Float> enemyFlash = new HashMap<>();
   private final List<Fx> effects = new ArrayList<>();
 
-  /** Advances every smoothed value and effect by one client frame. */
   void update(double dt, Map<Integer, EntityState> entities, int myPlayerId) {
-    interpolateRemotes(entities, myPlayerId);
+    smoothRemotes(entities, myPlayerId);
     updateBullets(dt, entities);
     trackEnemyDamage(entities);
     trackPickups(entities);
     advanceEffects(dt);
   }
 
-  /** Smoothed on-screen position of an entity as {@code {x, y}}, or null if it is unknown yet. */
-  float[] smoothed(int id) {
-    return remotePos.get(id);
+  /** Smoothed position of an actor, falling back to its snapshot position. */
+  Vec2 positionOf(EntityState e) {
+    Vec2 p = smoothed.get(e.id());
+    return p != null ? p : Vec2.of(e.x(), e.y());
   }
 
-  /** Live projectiles as {@code {x, y, angle, vx, vy, weaponId}}. */
-  Collection<float[]> bullets() {
+  Collection<Bullet> bullets() {
     return bullets.values();
   }
 
-  /** How lit an enemy is from a recent hit: 1 right after it lands, easing to 0. */
+  /** How lit an enemy is from a recent hit: 1 as it lands, easing to 0. */
   float hitFlash(int id) {
     return Math.clamp(enemyFlash.getOrDefault(id, 0f) / HIT_FLASH_SECONDS, 0f, 1f);
   }
@@ -147,138 +108,85 @@ final class WorldView {
     return effects;
   }
 
-  private void interpolateRemotes(Map<Integer, EntityState> live, int myPlayerId) {
-    remotePos.keySet().removeIf(id -> id == myPlayerId || !live.containsKey(id));
+  private void smoothRemotes(Map<Integer, EntityState> live, int myPlayerId) {
+    smoothed.keySet().removeIf(id -> id == myPlayerId || !live.containsKey(id));
     for (EntityState e : live.values()) {
-      if (e.id() == myPlayerId || !isSmoothed(e.kind())) {
-        continue; // bullets are dead-reckoned below; booms and pickups never move
+      if (e.id() == myPlayerId || !e.kind().isActor()) {
+        continue;
       }
-      float[] rp = remotePos.get(e.id());
-      if (rp == null) {
-        remotePos.put(e.id(), new float[] {e.x(), e.y()});
-      } else {
-        rp[0] += (e.x() - rp[0]) * REMOTE_SMOOTHING;
-        rp[1] += (e.y() - rp[1]) * REMOTE_SMOOTHING;
-      }
+      Vec2 target = Vec2.of(e.x(), e.y());
+      Vec2 current = smoothed.get(e.id());
+      smoothed.put(e.id(),
+          current == null ? target : current.add(target.sub(current).scale(REMOTE_SMOOTHING)));
     }
   }
 
-  /**
-   * Whether a kind's position is worth easing between snapshots. A positive list on purpose: only
-   * actors actually travel between the positions two snapshots report.
-   */
-  private static boolean isSmoothed(String kind) {
-    return "cat".equals(kind) || "rat".equals(kind) || "mouse".equals(kind);
-  }
-
-  /** Flies projectiles forward every client frame and reconciles them with server snapshots. */
   private void updateBullets(double dt, Map<Integer, EntityState> live) {
-    // 1. Drop bullets the server no longer reports.
-    bullets.keySet().removeIf(id -> {
-      EntityState e = live.get(id);
-      return e == null || !"bullet".equals(e.kind());
-    });
-
-    // 2. Synchronize new/existing bullets with server snapshot authority.
+    bullets.keySet().removeIf(id -> !live.containsKey(id));
     for (EntityState e : live.values()) {
-      if (!"bullet".equals(e.kind())) {
+      if (e.kind() != EntityKind.BULLET) {
         continue;
       }
       Weapon weapon = Weapon.byId(e.weaponId());
-      float speed = weapon.projectileSpeed();
-      float vx = (float) Math.cos(e.angle()) * speed;
-      float vy = (float) Math.sin(e.angle()) * speed;
-
-      float[] b = bullets.get(e.id());
+      Vec2 authority = Vec2.of(e.x(), e.y());
+      Bullet b = bullets.get(e.id());
       if (b == null) {
-        // [x, y, angle, vx, vy, weaponId]
-        bullets.put(e.id(), new float[] {e.x(), e.y(), e.angle(), vx, vy, e.weaponId()});
-        // First sighting of a round: flash roughly where it left the barrel a tick ago. Shotgun
-        // pellets share a muzzle, so the overlapping flashes read as one bigger blast.
-        float back = (float) (speed * TICK_DT);
-        effects.add(
-            new Fx(
-                Fx.Kind.MUZZLE,
-                e.x() - (float) Math.cos(e.angle()) * back,
-                e.y() - (float) Math.sin(e.angle()) * back,
-                e.angle(),
-                weapon.explosive() ? 1 : 0,
-                0.09f));
+        bullets.put(e.id(), new Bullet(authority, e.angle(), weapon));
+        // First sighting: flash where it left the barrel a tick ago. Shotgun pellets share a
+        // muzzle, so the overlapping flashes read as one bigger blast.
+        float back = (float) (weapon.projectileSpeed() * GameConfig.TICK_DT);
+        effects.add(new Fx(Fx.Kind.MUZZLE, authority.sub(Vec2.fromAngle(e.angle()).scale(back)),
+            e.angle(), 0, weapon.explosive(), 0.09f));
       } else {
-        float dx = e.x() - b[0];
-        float dy = e.y() - b[1];
-        if (dx * dx + dy * dy > BULLET_SNAP * BULLET_SNAP) {
-          b[0] = e.x();
-          b[1] = e.y();
-        } else {
-          b[0] += dx * BULLET_SMOOTHING;
-          b[1] += dy * BULLET_SMOOTHING;
-        }
-        b[2] = e.angle();
-        b[3] = vx;
-        b[4] = vy;
-        b[5] = e.weaponId();
+        Vec2 pos = authority.distance(b.pos()) > BULLET_SNAP
+            ? authority
+            : b.pos().add(authority.sub(b.pos()).scale(BULLET_SMOOTHING));
+        bullets.put(e.id(), new Bullet(pos, e.angle(), weapon));
       }
     }
-
-    // 3. Extrapolate forward for this client frame.
     if (dt > 0) {
-      for (float[] b : bullets.values()) {
-        b[0] += b[3] * (float) dt;
-        b[1] += b[4] * (float) dt;
-      }
+      bullets.replaceAll((id, b) -> b.moved(dt));
     }
   }
 
-  /**
-   * Snapshot-to-snapshot health deltas drive all hit feedback: a flash on the enemy plus a floating
-   * damage number. Comparing against the last value seen makes this idempotent, so running it every
-   * frame (rather than only on a new snapshot) reports each hit exactly once.
-   */
+  /** Health drops between snapshots become a flash and a floating number, each hit exactly once. */
   private void trackEnemyDamage(Map<Integer, EntityState> live) {
     enemyHp.keySet().removeIf(id -> !live.containsKey(id));
     enemyFlash.keySet().removeIf(id -> !live.containsKey(id));
     for (EntityState e : live.values()) {
-      if (!"rat".equals(e.kind()) && !"mouse".equals(e.kind())) {
+      if (!e.kind().isEnemy()) {
         continue;
       }
       Float previous = enemyHp.put(e.id(), e.hp());
       if (previous == null || e.hp() >= previous) {
         continue;
       }
-      float[] pos = remotePos.get(e.id());
-      float x = pos != null ? pos[0] : e.x();
-      float y = pos != null ? pos[1] : e.y();
+      Vec2 at = positionOf(e);
       enemyFlash.put(e.id(), HIT_FLASH_SECONDS);
-      effects.add(new Fx(Fx.Kind.HIT, x, y, 0f, 0, 0.22f));
-      effects.add(
-          new Fx(Fx.Kind.DAMAGE, x, y - GameConfig.TILE * 0.4f, 0f,
-              Math.max(1, Math.round(previous - e.hp())), 0.7f));
+      effects.add(new Fx(Fx.Kind.HIT, at, 0f, 0, false, 0.22f));
+      effects.add(new Fx(Fx.Kind.DAMAGE, at.sub(Vec2.of(0f, GameConfig.TILE * 0.4f)), 0f,
+          Math.max(1, Math.round(previous - e.hp())), false, 0.7f));
     }
   }
 
-  /**
-   * Turns a pickup disappearing into a collection pop. Nothing on the wire says who took what — but
-   * an expired pickup is last seen with its clock nearly run out, so any that vanishes with life to
-   * spare was walked into by somebody.
-   */
+  /** A pickup vanishing with life to spare was walked into by somebody: pop a ring there. */
   private void trackPickups(Map<Integer, EntityState> live) {
-    Iterator<Map.Entry<Integer, float[]>> gone = pickupSeen.entrySet().iterator();
-    while (gone.hasNext()) {
-      Map.Entry<Integer, float[]> entry = gone.next();
+    Iterator<Map.Entry<Integer, PickupSeen>> it = pickupSeen.entrySet().iterator();
+    while (it.hasNext()) {
+      Map.Entry<Integer, PickupSeen> entry = it.next();
       if (live.containsKey(entry.getKey())) {
         continue;
       }
-      float[] last = entry.getValue();
-      if (last[2] > PICKUP_TAKEN_LIFE) {
-        effects.add(new Fx(Fx.Kind.PICKUP, last[0], last[1], 0f, (int) last[3], 0.34f));
+      PickupSeen last = entry.getValue();
+      if (last.life() > PICKUP_TAKEN_LIFE) {
+        effects.add(new Fx(Fx.Kind.PICKUP, last.pos(), 0f, 0, last.health(), 0.34f));
       }
-      gone.remove();
+      it.remove();
     }
     for (EntityState e : live.values()) {
-      boolean health = "health".equals(e.kind());
-      if (health || "ammo".equals(e.kind())) {
-        pickupSeen.put(e.id(), new float[] {e.x(), e.y(), e.hp(), health ? 1f : 0f});
+      if (e.kind().isPickup()) {
+        pickupSeen.put(e.id(),
+            new PickupSeen(Vec2.of(e.x(), e.y()), e.hp(), e.kind() == EntityKind.HEALTH));
       }
     }
   }
@@ -287,7 +195,7 @@ final class WorldView {
     for (Fx fx : effects) {
       fx.life -= (float) dt;
       if (fx.kind == Fx.Kind.DAMAGE) {
-        fx.y -= (float) (26 * dt); // drift upward off the enemy that took the hit
+        fx.pos = fx.pos.sub(Vec2.of(0f, (float) (26 * dt))); // drift upward
       }
     }
     effects.removeIf(fx -> fx.life <= 0f);

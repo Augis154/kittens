@@ -6,37 +6,23 @@ import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
 
 /**
- * The window's view onto the world: a fixed-size viewport that follows a target and stays clamped
- * inside the map, so a level may be larger than the screen.
- *
- * <p>This class owns the world/screen conversion in <em>both</em> directions, and callers must use
- * it rather than reimplementing the arithmetic. Anything drawn after {@link #apply} is in world
- * coordinates; anything that starts from a mouse event has to come back through {@link #worldX} /
- * {@link #worldY} <em>every frame</em>, because panning moves the world underneath a cursor that
- * never moved.
- *
- * <p>Client-only, like {@link Theme} — none of this is simulated, so nothing here belongs in
- * {@code GameConfig}.
+ * A fixed-size viewport that follows a target and stays clamped inside the map. Owns the
+ * world/screen conversion in both directions: draw after {@link #apply}, and bring mouse positions
+ * back through {@link #worldX}/{@link #worldY} every frame, since panning moves the world under a
+ * cursor that never moved.
  */
 final class Camera {
-  /** Viewport size in tiles. The window is this, times the tile size, times the render scale. */
   private static final int VIEW_TILES_X = 25;
   private static final int VIEW_TILES_Y = 15;
-
-  /** Fraction of the remaining gap the view closes per second while easing. */
+  /** Fraction of the remaining gap closed per second while easing. */
   private static final double FOLLOW_RATE = 12.0;
-
-  /**
-   * Gap (world px) above which the view jumps instead of easing. A respawn moves the kitten across
-   * the level, and panning the whole way would leave the player watching scenery.
-   */
+  /** Gap above which the view jumps instead of easing (a respawn across the level). */
   private static final float SNAP_DISTANCE = 420f;
 
   private final TileMap map;
   private final float scale;
   private final float viewWidth;
   private final float viewHeight;
-
   /** World coordinates of the viewport's top-left corner. */
   private float x;
   private float y;
@@ -59,14 +45,10 @@ final class Camera {
     return Math.round(viewHeight * scale);
   }
 
-  /** Eases the viewport toward centring {@code target}, or jumps to it on the first call. */
+  /** Eases toward centring {@code target}, jumping on the first call or past {@link #SNAP_DISTANCE}. */
   void follow(Vec2 target, double dt) {
-    if (target == null) {
-      return;
-    }
     float goalX = clampX(target.x - viewWidth * 0.5f);
     float goalY = clampY(target.y - viewHeight * 0.5f);
-
     float dx = goalX - x;
     float dy = goalY - y;
     if (!placed || dx * dx + dy * dy > SNAP_DISTANCE * SNAP_DISTANCE || dt <= 0) {
@@ -75,23 +57,17 @@ final class Camera {
       placed = true;
       return;
     }
-    // Exponential ease, framed in elapsed time so the feel does not change with the frame rate.
-    float k = (float) (1.0 - Math.exp(-FOLLOW_RATE * dt));
+    float k = (float) (1.0 - Math.exp(-FOLLOW_RATE * dt)); // frame-rate independent ease
     x += dx * k;
     y += dy * k;
   }
 
-  /**
-   * Scales and offsets {@code g} so that world coordinates land in the window. The offset is
-   * snapped to whole screen pixels: the sprites are drawn nearest-neighbour, and a fractional pan
-   * would make them shimmer as the camera creeps.
-   */
+  /** Offsets and scales {@code g} so world coordinates land in the window; the offset is whole pixels so nearest-neighbour sprites don't shimmer. */
   void apply(Graphics2D g) {
     g.translate(-offsetX(), -offsetY());
     g.scale(scale, scale);
   }
 
-  /** Inverse of {@link #apply} for the x axis — screen pixels back to world coordinates. */
   float worldX(int screenX) {
     return (screenX + offsetX()) / scale;
   }
@@ -100,17 +76,13 @@ final class Camera {
     return (screenY + offsetY()) / scale;
   }
 
-  /**
-   * The block of tiles the viewport can currently see, widened by one so that a tile straddling the
-   * edge — and the shadow a wall casts below itself — is still drawn.
-   */
+  /** The visible tile block, widened by one so straddling tiles and wall shadows still draw. */
   Renderer.Tiles visibleTiles() {
-    int tile = GameConfig.TILE;
     return new Renderer.Tiles(
-        Math.max(0, (int) Math.floor(x / tile) - 1),
-        Math.max(0, (int) Math.floor(y / tile) - 1),
-        Math.min(map.width() - 1, (int) Math.floor((x + viewWidth) / tile) + 1),
-        Math.min(map.height() - 1, (int) Math.floor((y + viewHeight) / tile) + 1));
+        Math.max(0, map.colAt(x) - 1),
+        Math.max(0, map.rowAt(y) - 1),
+        Math.min(map.width() - 1, map.colAt(x + viewWidth) + 1),
+        Math.min(map.height() - 1, map.rowAt(y + viewHeight) + 1));
   }
 
   private int offsetX() {
@@ -121,10 +93,7 @@ final class Camera {
     return Math.round(y * scale);
   }
 
-  /**
-   * Keeps the viewport inside the map. A map narrower than the view is centred instead, which is
-   * why the original single-screen arena still renders exactly as it did before the camera existed.
-   */
+  /** Inside the map, or centred when the map is narrower than the view. */
   private float clampX(float desired) {
     float max = map.pixelWidth() - viewWidth;
     return max <= 0 ? max * 0.5f : Math.clamp(desired, 0f, max);
