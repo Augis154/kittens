@@ -10,7 +10,6 @@ import kittens.common.entity.Enemy;
 import kittens.common.entity.EnemyFactory;
 import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
-import kittens.common.net.EntityKind;
 
 /**
  * Wave progression and enemy spawning; delegates enemy instantiation to {@link EnemyFactory}.
@@ -76,9 +75,7 @@ final class SpawnDirector {
     remainingInWave--;
 
     Vec2 at = selectSpawnPosition(map, players);
-    double mouseRatio = Math.min(0.65, (wave - 1) * 0.2);
-    EntityKind kind = random.nextDouble() < mouseRatio ? EntityKind.MOUSE : EntityKind.RAT;
-    return enemyFactory.createEnemy(kind, nextEnemyId++, at);
+    return enemyFactory.createForWave(wave, nextEnemyId++, at, random);
   }
 
   /** A random spawn point far from every living player, else the farthest one there is. */
