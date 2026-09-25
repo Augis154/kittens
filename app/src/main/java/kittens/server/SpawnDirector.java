@@ -3,17 +3,19 @@ package kittens.server;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Objects;
 import java.util.Random;
 import kittens.common.GameConfig;
 import kittens.common.entity.Enemy;
-import kittens.common.entity.Mouse;
-import kittens.common.entity.Rat;
+import kittens.common.entity.EnemyFactory;
 import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
+import kittens.common.net.EntityKind;
 
 /**
- * Wave progression and enemy spawning (a simple Factory for enemies). Cadence, caps and spacing are
- * private constants rather than {@code GameConfig} because no client has to agree on them.
+ * Wave progression and enemy spawning; delegates enemy instantiation to {@link EnemyFactory}.
+ * Cadence, caps and spacing are private constants rather than {@code GameConfig} because no client
+ * has to agree on them.
  */
 final class SpawnDirector {
   /**
@@ -24,6 +26,7 @@ final class SpawnDirector {
   private static final int MAX_ACTIVE_ENEMIES = 24;
 
   private final Random random = new Random();
+  private final EnemyFactory enemyFactory;
   private int nextEnemyId = GameConfig.ENEMY_ID_BASE;
 
   private int wave;
@@ -33,6 +36,11 @@ final class SpawnDirector {
   private boolean waveInProgress;
 
   SpawnDirector() {
+    this(new EnemyFactory());
+  }
+
+  SpawnDirector(EnemyFactory enemyFactory) {
+    this.enemyFactory = Objects.requireNonNull(enemyFactory, "enemyFactory must not be null");
     prepareWave(1);
   }
 
@@ -69,7 +77,8 @@ final class SpawnDirector {
 
     Vec2 at = selectSpawnPosition(map, players);
     double mouseRatio = Math.min(0.65, (wave - 1) * 0.2);
-    return random.nextDouble() < mouseRatio ? new Mouse(nextEnemyId++, at) : new Rat(nextEnemyId++, at);
+    EntityKind kind = random.nextDouble() < mouseRatio ? EntityKind.MOUSE : EntityKind.RAT;
+    return enemyFactory.createEnemy(kind, nextEnemyId++, at);
   }
 
   /** A random spawn point far from every living player, else the farthest one there is. */

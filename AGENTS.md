@@ -112,7 +112,7 @@ knows the wire is newline-delimited JSON over TCP, used by both ends. Everything
 is the shared simulation both sides run.
 
 - **`common/`** — `math/` (`Vec2`, `Aabb`), `map/` (`TileMap`, `Tile`), `entity/`
-  (`GameObject` → `Actor` → `Enemy` → `Rat`/`Mouse`), `weapon/`
+  (`GameObject` → `Actor` → `Enemy` → `Rat`/`Mouse`, `EnemyFactory`), `weapon/`
   (`Weapon` → `Pistol`/`Shotgun`/`Rifle`/`Bazooka`), `sim/` (`Motion`, `PathField`),
   `net/` (the DTOs, `EntityKind`, `MessageCodec`, `MessageChannel`), `GameConfig`.
 - **`server/`** — `Server` (accept loop + per-client reader threads), `ServerLoop`, `GameWorld`,
