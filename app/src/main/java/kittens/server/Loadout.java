@@ -4,7 +4,7 @@ import kittens.common.weapon.Weapon;
 
 /** A player's selected weapon, per-weapon magazines, reload timer and fire cooldown. */
 final class Loadout {
-  private Weapon weapon = Weapon.PISTOL;
+  private Weapon weapon = Weapon.SIDEARM;
   /** Rounds left per weapon, indexed by {@link Weapon#id()}. */
   private final int[] magazine = new int[Weapon.count()];
   private double reloadTimer; // seconds left; 0 = not reloading

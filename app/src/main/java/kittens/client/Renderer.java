@@ -135,7 +135,7 @@ final class Renderer {
       }
     }
     for (WorldView.Bullet b : view.bullets()) {
-      drawBullet(g, b.pos(), b.angle(), b.weapon() == Weapon.BAZOOKA);
+      drawBullet(g, b.pos(), b.angle(), b.weapon() == Weapon.LAUNCHER);
     }
     for (EntityState e : entities.values()) {
       if (e.kind().isEnemy()) {

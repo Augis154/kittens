@@ -25,10 +25,14 @@ public abstract class Weapon {
     }
   }
 
-  public static final Weapon PISTOL = BY_ID[0];
-  public static final Weapon SHOTGUN = BY_ID[1];
-  public static final Weapon RIFLE = BY_ID[2];
-  public static final Weapon BAZOOKA = BY_ID[3];
+  /**
+   * The family's products, named by their {@link WeaponFactory} role rather than by the class the
+   * current family happens to supply — an alternate arsenal answers a role with its own weapon.
+   */
+  public static final Weapon SIDEARM = BY_ID[0];
+  public static final Weapon SCATTERGUN = BY_ID[1];
+  public static final Weapon AUTOMATIC = BY_ID[2];
+  public static final Weapon LAUNCHER = BY_ID[3];
 
   private final int id;
   private final String sprite;
@@ -147,9 +151,9 @@ public abstract class Weapon {
     return displayName;
   }
 
-  /** The weapon with this wire id, or the pistol for anything out of range. */
+  /** The weapon with this wire id, or the sidearm for anything out of range. */
   public static Weapon byId(int id) {
-    return id < 0 || id >= BY_ID.length ? PISTOL : BY_ID[id];
+    return id < 0 || id >= BY_ID.length ? SIDEARM : BY_ID[id];
   }
 
   public static int count() {

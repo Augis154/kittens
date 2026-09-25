@@ -31,7 +31,7 @@ final class InputHandler {
   private float moveY;
   private boolean firing;
   private boolean reloadRequested;
-  private Weapon weapon = Weapon.PISTOL;
+  private Weapon weapon = Weapon.SIDEARM;
   private int mouseX;
   private int mouseY;
 
