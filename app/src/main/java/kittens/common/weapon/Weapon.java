@@ -5,23 +5,23 @@ package kittens.common.weapon;
  * code may compare weapons with {@code ==}; subclass constructors are package-private to keep that
  * true, and the registry is built once from a {@link WeaponFactory} (Abstract Factory) so the
  * arsenal in play is chosen in one place. {@link #id()} is the wire value and the registry index,
- * and adding a weapon means appending with the next id — never renumbering.
+ * stamped from the factory's role order rather than declared per weapon — so adding a role means
+ * appending to the factory, never renumbering.
  */
 public abstract class Weapon {
-  /** The arsenal in play. Swapping families is this line and nothing else. */
+  /** The family in play. Swapping arsenals is this line and nothing else. */
   private static final WeaponFactory FACTORY = new StandardWeaponFactory();
 
   /**
-   * Indexed by {@link #id()}, which is therefore also the hotkey order. Declared before the
-   * constants below because static initialisers run in source order.
+   * The family, in the factory's role order — which is therefore the id and hotkey order. Declared
+   * before the constants below because static initialisers run in source order.
    */
-  private static final Weapon[] BY_ID = FACTORY.createArsenal();
+  private static final Weapon[] ARSENAL = FACTORY.createArsenal();
 
   static {
-    for (int i = 0; i < BY_ID.length; i++) {
-      if (BY_ID[i].id() != i) {
-        throw new IllegalStateException("weapon id must match its registry index: " + BY_ID[i]);
-      }
+    // The factory's role order defines the ids, so a family cannot number itself wrongly.
+    for (int i = 0; i < ARSENAL.length; i++) {
+      ARSENAL[i].id = i;
     }
   }
 
@@ -29,12 +29,14 @@ public abstract class Weapon {
    * The family's products, named by their {@link WeaponFactory} role rather than by the class the
    * current family happens to supply — an alternate arsenal answers a role with its own weapon.
    */
-  public static final Weapon SIDEARM = BY_ID[0];
-  public static final Weapon SCATTERGUN = BY_ID[1];
-  public static final Weapon AUTOMATIC = BY_ID[2];
-  public static final Weapon LAUNCHER = BY_ID[3];
+  public static final Weapon SIDEARM = ARSENAL[0];
+  public static final Weapon SCATTERGUN = ARSENAL[1];
+  public static final Weapon AUTOMATIC = ARSENAL[2];
+  public static final Weapon LAUNCHER = ARSENAL[3];
 
-  private final int id;
+  /** Not final: the registry stamps it from the factory's role order before anyone can read it. */
+  private int id;
+
   private final String sprite;
   private final String displayName;
   private final double fireInterval;
@@ -50,18 +52,17 @@ public abstract class Weapon {
   private final float recoil;
 
   /** Non-explosive, no-recoil weapon. */
-  protected Weapon(int id, String sprite, String displayName, double fireInterval, double damage,
+  protected Weapon(String sprite, String displayName, double fireInterval, double damage,
       int pellets, float spread, float projectileSpeed, double projectileLifetime,
       int magazineSize, double reloadTime) {
-    this(id, sprite, displayName, fireInterval, damage, pellets, spread, projectileSpeed,
+    this(sprite, displayName, fireInterval, damage, pellets, spread, projectileSpeed,
         projectileLifetime, magazineSize, reloadTime, 0f, 0, 0f);
   }
 
-  protected Weapon(int id, String sprite, String displayName, double fireInterval, double damage,
+  protected Weapon(String sprite, String displayName, double fireInterval, double damage,
       int pellets, float spread, float projectileSpeed, double projectileLifetime,
       int magazineSize, double reloadTime, float explosionRadius, double explosionDamage,
       float recoil) {
-    this.id = id;
     this.sprite = sprite;
     this.displayName = displayName;
     this.fireInterval = fireInterval;
@@ -77,6 +78,7 @@ public abstract class Weapon {
     this.recoil = recoil;
   }
 
+  /** Wire value and registry index; see {@link WeaponFactory} for where the order comes from. */
   public int id() {
     return id;
   }
@@ -153,10 +155,10 @@ public abstract class Weapon {
 
   /** The weapon with this wire id, or the sidearm for anything out of range. */
   public static Weapon byId(int id) {
-    return id < 0 || id >= BY_ID.length ? SIDEARM : BY_ID[id];
+    return id < 0 || id >= ARSENAL.length ? SIDEARM : ARSENAL[id];
   }
 
   public static int count() {
-    return BY_ID.length;
+    return ARSENAL.length;
   }
 }

@@ -6,10 +6,11 @@ package kittens.common.weapon;
  * {@code new Pistol()}. The roles, not the classes, are the products — a family is free to answer
  * {@link #createAutomatic()} with something other than a {@link Rifle}.
  *
- * <p>Two rules a concrete family must respect, both enforced by {@link Weapon}'s static check:
- * the products come back in {@link Weapon#id()} order, and each role keeps the id the registry
- * indexes it by. Weapon constructors are package-private to keep the Singleton guarantee (code
- * compares weapons with {@code ==}), so concrete factories live in this package.
+ * <p>This ordering <em>defines</em> the wire ids: {@link Weapon}'s registry stamps each product
+ * with its position here, so no weapon declares an id and a family cannot number itself wrongly.
+ * Appending a role is therefore the only safe change — reordering renumbers the wire and the
+ * hotkeys. Weapon constructors are package-private to keep the Singleton guarantee (code compares
+ * weapons with {@code ==}), so concrete factories live in this package.
  */
 public interface WeaponFactory {
   /** Role 0: the starting sidearm, always available. */

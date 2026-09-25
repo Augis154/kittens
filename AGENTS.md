@@ -275,14 +275,17 @@ Two rules are worth knowing before touching them:
   `GameConfig`.** `Weapon` is abstract with overridable accessors; each concrete weapon
   (`Pistol`, `Shotgun`, `Rifle`, `Bazooka`) passes its numbers to the base constructor. Subclass
   constructors are package-private and the only instances are the constants on `Weapon`, so code
-  may compare weapons with `==`. `Weapon.id()` is the wire value *and* the index into the registry
-  behind `byId`/`count` — a static check enforces that at class init, so adding a weapon means
-  appending to the registry and giving it the next id, never renumbering an existing one.
-  The registry itself is built once from the `WeaponFactory` (Abstract Factory) named by
-  `Weapon.FACTORY` — one factory supplies the whole family, one product per role (sidearm,
-  scattergun, automatic, launcher), returned in id order. `StandardWeaponFactory` is the shipped
-  family and is package-private so nothing outside can build a second arsenal and break the `==`
-  guarantee; an alternate family is a new package-private class plus that one line in `Weapon`.
+  may compare weapons with `==`. The registry is built once from the `WeaponFactory` (Abstract
+  Factory) named by `Weapon.FACTORY` — one factory supplies the whole family, one product per role
+  (sidearm, scattergun, automatic, launcher), and the constants on `Weapon` are named for those
+  roles rather than for the classes the shipped family happens to supply.
+  `StandardWeaponFactory` is that family and is package-private, so nothing outside can build a
+  second arsenal and break the `==` guarantee; an alternate family is a new package-private class
+  plus that one line in `Weapon`.
+  **The factory's role order defines `Weapon.id()`** — the wire value *and* the index into `byId`,
+  `Loadout.magazine` and the HUD's hotkey slots. No weapon declares its own id; the registry stamps
+  it from the array position at class init. So appending a role is safe and reordering the factory
+  silently renumbers the wire, the magazines and keys 1-4 at once.
 - Entity id ranges keep kinds from colliding: players from 0, enemies from `ENEMY_ID_BASE`,
   projectiles from `PROJECTILE_ID_BASE`, explosions from `EXPLOSION_ID_BASE`.
 - `GameConfig.FRIENDLY_FIRE` is a compile-time `false`, so the player-hit branches in `Projectile`
