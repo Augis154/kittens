@@ -9,7 +9,8 @@ import kittens.common.net.EntityKind;
 import kittens.common.net.EntityState;
 import kittens.common.net.InputCommand;
 import kittens.common.sim.Motion;
-import kittens.common.weapon.Weapon;
+import kittens.common.weapon.Arsenal;
+import kittens.common.weapon.WeaponFactory;
 
 /**
  * The server's authoritative player. Inputs are queued by the connection's reader thread and
@@ -22,7 +23,7 @@ final class ServerPlayer extends Actor {
 
   private final Vec2 spawn;
   private final ConcurrentLinkedQueue<InputCommand> inbox = new ConcurrentLinkedQueue<>();
-  private final Loadout loadout = new Loadout();
+  private final Arsenal arsenal = WeaponFactory.newArsenal();
 
   private boolean firing;
   private boolean fireRequested;
@@ -41,8 +42,8 @@ final class ServerPlayer extends Actor {
     return (float) facing;
   }
 
-  Loadout loadout() {
-    return loadout;
+  Arsenal arsenal() {
+    return arsenal;
   }
 
   long lastProcessedSeq() {
@@ -56,7 +57,7 @@ final class ServerPlayer extends Actor {
 
   void tick(double dt, TileMap map) {
     invulnerableTimer = Math.max(0, invulnerableTimer - dt);
-    loadout.tick(dt);
+    arsenal.tick(dt);
 
     if (!isAlive()) {
       respawnTimer -= dt;
@@ -78,9 +79,9 @@ final class ServerPlayer extends Actor {
       lastProcessedSeq = cmd.seq();
       facing = cmd.aimAngle();
       firing = cmd.firing();
-      loadout.select(Weapon.byId(cmd.weaponId()));
+      arsenal.select(cmd.weaponId());
       if (cmd.reload()) {
-        loadout.requestReload();
+        arsenal.requestReload();
       }
       pos = Motion.step(map, pos, cmd.moveX(), cmd.moveY(), GameConfig.PLAYER_SPEED,
           GameConfig.TICK_DT);
@@ -93,7 +94,7 @@ final class ServerPlayer extends Actor {
     }
     decayKnockback(dt);
 
-    if (firing && loadout.tryFire()) {
+    if (firing && arsenal.tryFire()) {
       fireRequested = true;
     }
   }
@@ -127,12 +128,12 @@ final class ServerPlayer extends Actor {
     pos = spawn;
     health = maxHealth;
     alive = true;
-    loadout.restock();
+    arsenal.restock();
     invulnerableTimer = GameConfig.RESPAWN_INVULNERABILITY;
   }
 
   EntityState toEntityState() {
     return new EntityState(id, EntityKind.CAT, pos.x, pos.y, (float) facing, (float) health,
-        loadout.weapon().id(), (float) invulnerableTimer);
+        arsenal.selectedId(), (float) invulnerableTimer);
   }
 }

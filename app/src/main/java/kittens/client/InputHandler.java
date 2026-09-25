@@ -12,6 +12,7 @@ import java.util.Set;
 import javax.swing.JComponent;
 import javax.swing.Timer;
 import kittens.common.weapon.Weapon;
+import kittens.common.weapon.WeaponFactory;
 
 /**
  * The local player's raw intent, kept current by Swing listeners and sampled on each input tick.
@@ -31,7 +32,7 @@ final class InputHandler {
   private float moveY;
   private boolean firing;
   private boolean reloadRequested;
-  private Weapon weapon = Weapon.SIDEARM;
+  private int weaponId; // role 0, the sidearm
   private int mouseX;
   private int mouseY;
 
@@ -90,8 +91,13 @@ final class InputHandler {
     return firing;
   }
 
+  /** Wire id of the selected role; the authoritative selection is the server's. */
+  int weaponId() {
+    return weaponId;
+  }
+
   Weapon weapon() {
-    return weapon;
+    return WeaponFactory.weapon(weaponId);
   }
 
   int mouseX() {
@@ -110,8 +116,8 @@ final class InputHandler {
   }
 
   private void onKeyPressed(int code) {
-    if (code >= KeyEvent.VK_1 && code < KeyEvent.VK_1 + Weapon.count()) {
-      weapon = Weapon.byId(code - KeyEvent.VK_1);
+    if (code >= KeyEvent.VK_1 && code < KeyEvent.VK_1 + WeaponFactory.count()) {
+      weaponId = code - KeyEvent.VK_1;
       return;
     }
     if (code == KeyEvent.VK_R) {

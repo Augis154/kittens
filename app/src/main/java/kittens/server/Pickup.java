@@ -39,10 +39,10 @@ final class Pickup extends GameObject {
       }
       player.heal(GameConfig.PICKUP_HEALTH_AMOUNT);
     } else {
-      if (!player.loadout().wantsAmmo()) {
+      if (!player.arsenal().wantsAmmo()) {
         return false;
       }
-      player.loadout().restock();
+      player.arsenal().restock();
     }
     kill();
     return true;

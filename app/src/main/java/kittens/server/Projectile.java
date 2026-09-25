@@ -26,14 +26,17 @@ final class Projectile extends GameObject {
 
   private final int ownerId;
   private final Weapon weapon;
+  /** Carried so the round can name its weapon on the wire; weapons themselves are id-less. */
+  private final int weaponId;
   private final Vec2 velocity;
   private double life;
   private boolean explosionPending;
 
-  Projectile(int id, int ownerId, Vec2 pos, float angle, Weapon weapon) {
+  Projectile(int id, int ownerId, Vec2 pos, float angle, Weapon weapon, int weaponId) {
     super(id, pos, SIZE);
     this.ownerId = ownerId;
     this.weapon = weapon;
+    this.weaponId = weaponId;
     this.velocity = Vec2.fromAngle(angle).scale(weapon.projectileSpeed());
     this.life = weapon.projectileLifetime();
   }
@@ -168,6 +171,6 @@ final class Projectile extends GameObject {
 
   EntityState toEntityState() {
     float angle = (float) Math.atan2(velocity.y, velocity.x);
-    return new EntityState(id, EntityKind.BULLET, pos.x, pos.y, angle, 0f, weapon.id(), 0f);
+    return new EntityState(id, EntityKind.BULLET, pos.x, pos.y, angle, 0f, weaponId, 0f);
   }
 }

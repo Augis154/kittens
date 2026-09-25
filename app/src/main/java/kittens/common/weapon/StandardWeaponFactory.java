@@ -1,27 +1,24 @@
 package kittens.common.weapon;
 
-/**
- * The shipped arsenal: the four weapons the sprites and hotkeys 1-4 are drawn for. Package-private
- * so {@link Weapon}'s registry stays the only arsenal anyone can build, and weapons stay Singletons.
- */
-final class StandardWeaponFactory implements WeaponFactory {
+/** The shipped family: the four weapons the sprites and hotkeys 1-4 are drawn for. */
+final class StandardWeaponFactory extends WeaponFactory {
   @Override
-  public Weapon createSidearm() {
+  protected Weapon createSidearm() {
     return new Pistol();
   }
 
   @Override
-  public Weapon createScattergun() {
+  protected Weapon createScattergun() {
     return new Shotgun();
   }
 
   @Override
-  public Weapon createAutomatic() {
+  protected Weapon createAutomatic() {
     return new Rifle();
   }
 
   @Override
-  public Weapon createLauncher() {
+  protected Weapon createLauncher() {
     return new Bazooka();
   }
 }

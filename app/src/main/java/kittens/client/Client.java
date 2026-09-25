@@ -67,7 +67,7 @@ public final class Client extends JPanel {
       return;
     }
     float aim = aimAngle();
-    int weaponId = input.weapon().id();
+    int weaponId = input.weaponId();
     boolean reload = input.consumeReload();
     if (localDead()) {
       client.sendInput(0f, 0f, aim, false, weaponId, false); // can still aim, cannot move

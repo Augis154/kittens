@@ -12,6 +12,7 @@ import java.awt.Stroke;
 import java.awt.image.BufferedImage;
 import kittens.common.GameConfig;
 import kittens.common.weapon.Weapon;
+import kittens.common.weapon.WeaponFactory;
 
 /**
  * The screen-space overlay: hearts, status, weapon bar, ammo, crosshair and the connecting/downed
@@ -125,13 +126,13 @@ final class Hud {
   }
 
   private void drawWeaponBar(Graphics2D g, int width, int height, View v) {
-    int count = Weapon.count();
+    int count = WeaponFactory.count();
     int totalW = count * SLOT_W + (count - 1) * SLOT_GAP;
     int x0 = (width - totalW) / 2;
     int y = height - MARGIN - SLOT_H;
 
     for (int i = 0; i < count; i++) {
-      Weapon w = Weapon.byId(i);
+      Weapon w = WeaponFactory.weapon(i);
       boolean active = w == v.weapon();
       int x = x0 + i * (SLOT_W + SLOT_GAP);
       int top = active ? y - 6 : y; // the selected slot lifts and takes an accent border
@@ -155,7 +156,7 @@ final class Hud {
       g.setComposite(baseComposite);
 
       g.setFont(Theme.FONT_SMALL);
-      Theme.shadowedText(g, String.valueOf(w.id() + 1), x + 7, top + 16,
+      Theme.shadowedText(g, String.valueOf(i + 1), x + 7, top + 16,
           active ? Theme.ACCENT : Theme.TEXT_FAINT);
       String name = w.displayName();
       int nameX = x + (SLOT_W - Theme.textWidth(g, Theme.FONT_SMALL, name)) / 2;

@@ -149,14 +149,15 @@ final class GameWorld {
   }
 
   private void fire(ServerPlayer shooter) {
-    Weapon w = shooter.loadout().weapon();
+    Weapon w = shooter.arsenal().weapon();
+    int weaponId = shooter.arsenal().selectedId();
     float base = shooter.aimAngle();
     Vec2 aim = Vec2.fromAngle(base);
     Vec2 muzzle = shooter.pos().add(aim.scale(GameConfig.PLAYER_SIZE * 0.5f + 4f));
     ThreadLocalRandom rnd = ThreadLocalRandom.current();
     for (int pellet = 0; pellet < w.pellets(); pellet++) {
       float angle = w.spread() > 0f ? base + (float) rnd.nextDouble(-w.spread(), w.spread()) : base;
-      projectiles.add(new Projectile(nextProjectileId++, shooter.id(), muzzle, angle, w));
+      projectiles.add(new Projectile(nextProjectileId++, shooter.id(), muzzle, angle, w, weaponId));
     }
     if (w.recoil() > 0f) {
       shooter.applyKnockback(aim.scale(-w.recoil()));
@@ -186,7 +187,7 @@ final class GameWorld {
     if (viewer == null) {
       return new Snapshot(tick, -1, entities, 0, 0f);
     }
-    return new Snapshot(tick, viewer.lastProcessedSeq(), entities, viewer.loadout().ammo(),
-        viewer.loadout().reloadProgress());
+    return new Snapshot(tick, viewer.lastProcessedSeq(), entities, viewer.arsenal().ammo(),
+        viewer.arsenal().reloadProgress());
   }
 }

@@ -18,10 +18,9 @@ intent. Two constraints from it shape everything here:
    **Do not refactor code into design patterns unless asked.** Keeping the core free of rendering
    and socket code is the thing that preserves those seams. Where a pattern already fell out of
    the structure it is named in that class's comment (Template Method / Strategy seam in `Enemy`,
-   Singleton registry in `Weapon`, Command in `InputCommand`, Facade in `GameWorld`, Game Loop in
-   `ServerLoop`, Flyweight cache in `AssetManager`, Factory in `SpawnDirector`, Abstract Factory
-   in `WeaponFactory`); leave those
-   labels accurate when touching the class.
+   Singleton weapons shared by every `Arsenal`, Command in `InputCommand`, Facade in `GameWorld`,
+   Game Loop in `ServerLoop`, Flyweight cache in `AssetManager`, Factory in `SpawnDirector`,
+   Abstract Factory in `WeaponFactory`); leave those labels accurate when touching the class.
 
 ## Keeping this file current
 
@@ -113,10 +112,10 @@ is the shared simulation both sides run.
 
 - **`common/`** — `math/` (`Vec2`, `Aabb`), `map/` (`TileMap`, `Tile`), `entity/`
   (`GameObject` → `Actor` → `Enemy` → `Rat`/`Mouse`, `EnemyFactory`), `weapon/`
-  (`Weapon` → `Pistol`/`Shotgun`/`Rifle`/`Bazooka`), `sim/` (`Motion`, `PathField`),
+  (`Weapon` → `Pistol`/`Shotgun`/`Rifle`/`Bazooka`, plus `WeaponFactory` and `Arsenal`), `sim/` (`Motion`, `PathField`),
   `net/` (the DTOs, `EntityKind`, `MessageCodec`, `MessageChannel`), `GameConfig`.
 - **`server/`** — `Server` (accept loop + per-client reader threads), `ServerLoop`, `GameWorld`,
-  `ServerPlayer` + `Loadout` (weapon, magazines, reload), `Projectile`, `Explosion`, `Pickup`,
+  `ServerPlayer` (carries a `common.weapon.Arsenal`), `Projectile`, `Explosion`, `Pickup`,
   `SpawnDirector`, `PickupDirector`.
 - **`client/`** — `GameClient` (networking; publishes each snapshot as an immutable `Frame`),
   `Client` (window, timers, scene assembly), `InputHandler` (keys, mouse, cursor), `Predictor`
@@ -230,10 +229,10 @@ Two rules are worth knowing before touching them:
 
 - **A pickup is only consumed if it would do something.** A kitten at full health walks over a
   medkit; one with every magazine full walks over a crate. `Pickup.tryCollect` asks
-  `ServerPlayer.wantsHealth`/`Loadout.wantsAmmo` first, and kills the pickup the moment it is taken
+  `ServerPlayer.wantsHealth`/`Arsenal.wantsAmmo` first, and kills the pickup the moment it is taken
   so two players cannot share one. Collection is box overlap, not a radius.
 - **Reserve ammo is unlimited**, so what an ammo crate actually buys is the reload it skips —
-  `Loadout.restock` tops up every magazine *and* cancels a reload in flight.
+  `Arsenal.restock` tops up every magazine *and* cancels a reload in flight.
 
 ### Collision
 
@@ -271,21 +270,24 @@ Two rules are worth knowing before touching them:
   measured trade-offs, not arbitrary picks. The exception the directors already take: `SpawnDirector`
   and `PickupDirector` keep their cadence, caps and spacing as private constants, because no client
   ever has to agree on them.
-- **Weapons are singletons of a class hierarchy, and per-weapon tuning is the one exception to
-  `GameConfig`.** `Weapon` is abstract with overridable accessors; each concrete weapon
-  (`Pistol`, `Shotgun`, `Rifle`, `Bazooka`) passes its numbers to the base constructor. Subclass
-  constructors are package-private and the only instances are the constants on `Weapon`, so code
-  may compare weapons with `==`. The registry is built once from the `WeaponFactory` (Abstract
-  Factory) named by `Weapon.FACTORY` — one factory supplies the whole family, one product per role
-  (sidearm, scattergun, automatic, launcher), and the constants on `Weapon` are named for those
-  roles rather than for the classes the shipped family happens to supply.
-  `StandardWeaponFactory` is that family and is package-private, so nothing outside can build a
-  second arsenal and break the `==` guarantee; an alternate family is a new package-private class
-  plus that one line in `Weapon`.
-  **The factory's role order defines `Weapon.id()`** — the wire value *and* the index into `byId`,
-  `Loadout.magazine` and the HUD's hotkey slots. No weapon declares its own id; the registry stamps
-  it from the array position at class init. So appending a role is safe and reordering the factory
-  silently renumbers the wire, the magazines and keys 1-4 at once.
+- **`Weapon` is tuning and nothing else** — immutable, id-less, and the one exception to
+  `GameConfig` for per-weapon numbers. It is abstract with overridable accessors; each concrete
+  weapon (`Pistol`, `Shotgun`, `Rifle`, `Bazooka`) exists only to pass its numbers to the base
+  constructor, and their constructors are package-private.
+- **`WeaponFactory` is the Abstract Factory over the arsenal, and owns the wire ids.** The family
+  in play is the one line `WeaponFactory.ACTIVE`; each concrete family supplies one product per
+  role — sidearm, scattergun, automatic, launcher — and **that role order defines the wire ids**,
+  which are also the hotkeys, the HUD slot order and the magazine indices. Appending a role is safe;
+  reordering renumbers all of those at once. Products are built once and shared by every arsenal, so
+  weapons stay Singletons and code may compare them with `==`. `WeaponFactory.weapon(id)`/`count()`
+  are the decode path for anything holding a wire id (the renderer, the HUD, the client's hotkeys);
+  `StandardWeaponFactory` is package-private, so a new family is a new class in `common/weapon`
+  plus that one line.
+- **`Arsenal` is what one player carries**, and the only thing a factory hands out: the family, which
+  role is drawn, per-weapon magazines, the reload timer and the fire cooldown. Its ammo state is
+  server-authoritative — only `ServerPlayer` ticks an arsenal, and the client reads its own ammo and
+  reload off the snapshot rather than simulating them. Its constructor is package-private, so
+  `WeaponFactory.newArsenal()` is the only way to get one.
 - Entity id ranges keep kinds from colliding: players from 0, enemies from `ENEMY_ID_BASE`,
   projectiles from `PROJECTILE_ID_BASE`, explosions from `EXPLOSION_ID_BASE`.
 - `GameConfig.FRIENDLY_FIRE` is a compile-time `false`, so the player-hit branches in `Projectile`

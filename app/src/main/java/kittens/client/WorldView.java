@@ -11,6 +11,7 @@ import kittens.common.math.Vec2;
 import kittens.common.net.EntityKind;
 import kittens.common.net.EntityState;
 import kittens.common.weapon.Weapon;
+import kittens.common.weapon.WeaponFactory;
 
 /**
  * Cosmetic smoothing of everything the local player does <em>not</em> control: remote actors are
@@ -127,7 +128,7 @@ final class WorldView {
       if (e.kind() != EntityKind.BULLET) {
         continue;
       }
-      Weapon weapon = Weapon.byId(e.weaponId());
+      Weapon weapon = WeaponFactory.weapon(e.weaponId());
       Vec2 authority = Vec2.of(e.x(), e.y());
       Bullet b = bullets.get(e.id());
       if (b == null) {

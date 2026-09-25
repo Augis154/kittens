@@ -16,6 +16,7 @@ import kittens.common.math.Vec2;
 import kittens.common.net.EntityKind;
 import kittens.common.net.EntityState;
 import kittens.common.weapon.Weapon;
+import kittens.common.weapon.WeaponFactory;
 
 /**
  * Draws the arena in world coordinates (the caller has already applied the camera), as a pure
@@ -135,7 +136,7 @@ final class Renderer {
       }
     }
     for (WorldView.Bullet b : view.bullets()) {
-      drawBullet(g, b.pos(), b.angle(), b.weapon() == Weapon.LAUNCHER);
+      drawBullet(g, b.pos(), b.angle(), b.weapon().explosive());
     }
     for (EntityState e : entities.values()) {
       if (e.kind().isEnemy()) {
@@ -144,7 +145,7 @@ final class Renderer {
     }
     for (EntityState e : entities.values()) {
       if (e.kind() == EntityKind.CAT && e.id() != me) {
-        drawKitten(g, e, view.positionOf(e), e.angle(), Weapon.byId(e.weaponId()), false);
+        drawKitten(g, e, view.positionOf(e), e.angle(), WeaponFactory.weapon(e.weaponId()), false);
       }
     }
     EntityState mine = entities.get(me);
@@ -153,7 +154,7 @@ final class Renderer {
         drawKitten(g, mine, scene.predicted(), scene.aimAngle(), scene.localWeapon(), true);
       } else {
         drawKitten(g, mine, Vec2.of(mine.x(), mine.y()), mine.angle(),
-            Weapon.byId(mine.weaponId()), true);
+            WeaponFactory.weapon(mine.weaponId()), true);
       }
     }
     for (EntityState e : entities.values()) {
