@@ -3,17 +3,19 @@ package kittens.common.weapon;
 /**
  * A weapon's tuning. Every weapon is one of the Singleton constants below (a small registry), so
  * code may compare weapons with {@code ==}; subclass constructors are package-private to keep that
- * true. {@link #id()} is the wire value and the registry index, and adding a weapon means appending
- * with the next id — never renumbering.
+ * true, and the registry is built once from a {@link WeaponFactory} (Abstract Factory) so the
+ * arsenal in play is chosen in one place. {@link #id()} is the wire value and the registry index,
+ * and adding a weapon means appending with the next id — never renumbering.
  */
 public abstract class Weapon {
-  public static final Weapon PISTOL = new Pistol();
-  public static final Weapon SHOTGUN = new Shotgun();
-  public static final Weapon RIFLE = new Rifle();
-  public static final Weapon BAZOOKA = new Bazooka();
+  /** The arsenal in play. Swapping families is this line and nothing else. */
+  private static final WeaponFactory FACTORY = new StandardWeaponFactory();
 
-  /** Indexed by {@link #id()}, which is therefore also the hotkey order. */
-  private static final Weapon[] BY_ID = {PISTOL, SHOTGUN, RIFLE, BAZOOKA};
+  /**
+   * Indexed by {@link #id()}, which is therefore also the hotkey order. Declared before the
+   * constants below because static initialisers run in source order.
+   */
+  private static final Weapon[] BY_ID = FACTORY.createArsenal();
 
   static {
     for (int i = 0; i < BY_ID.length; i++) {
@@ -22,6 +24,11 @@ public abstract class Weapon {
       }
     }
   }
+
+  public static final Weapon PISTOL = BY_ID[0];
+  public static final Weapon SHOTGUN = BY_ID[1];
+  public static final Weapon RIFLE = BY_ID[2];
+  public static final Weapon BAZOOKA = BY_ID[3];
 
   private final int id;
   private final String sprite;

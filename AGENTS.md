@@ -19,7 +19,8 @@ intent. Two constraints from it shape everything here:
    and socket code is the thing that preserves those seams. Where a pattern already fell out of
    the structure it is named in that class's comment (Template Method / Strategy seam in `Enemy`,
    Singleton registry in `Weapon`, Command in `InputCommand`, Facade in `GameWorld`, Game Loop in
-   `ServerLoop`, Flyweight cache in `AssetManager`, Factory in `SpawnDirector`); leave those
+   `ServerLoop`, Flyweight cache in `AssetManager`, Factory in `SpawnDirector`, Abstract Factory
+   in `WeaponFactory`); leave those
    labels accurate when touching the class.
 
 ## Keeping this file current
@@ -277,6 +278,11 @@ Two rules are worth knowing before touching them:
   may compare weapons with `==`. `Weapon.id()` is the wire value *and* the index into the registry
   behind `byId`/`count` — a static check enforces that at class init, so adding a weapon means
   appending to the registry and giving it the next id, never renumbering an existing one.
+  The registry itself is built once from the `WeaponFactory` (Abstract Factory) named by
+  `Weapon.FACTORY` — one factory supplies the whole family, one product per role (sidearm,
+  scattergun, automatic, launcher), returned in id order. `StandardWeaponFactory` is the shipped
+  family and is package-private so nothing outside can build a second arsenal and break the `==`
+  guarantee; an alternate family is a new package-private class plus that one line in `Weapon`.
 - Entity id ranges keep kinds from colliding: players from 0, enemies from `ENEMY_ID_BASE`,
   projectiles from `PROJECTILE_ID_BASE`, explosions from `EXPLOSION_ID_BASE`.
 - `GameConfig.FRIENDLY_FIRE` is a compile-time `false`, so the player-hit branches in `Projectile`
