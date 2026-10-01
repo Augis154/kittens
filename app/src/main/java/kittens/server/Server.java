@@ -16,15 +16,25 @@ import kittens.common.net.MessageChannel;
  * Accepts sockets on the main thread, reads each client on its own {@code client-<id>} thread, and
  * runs the authoritative {@link GameWorld} on the {@link ServerLoop} thread, which also sends one
  * {@code Snapshot} per client per tick (the ack and ammo fields are recipient-specific).
+ *
+ * Singleton ERIKAS
  */
 public final class Server {
+  private static final Server INSTANCE = new Server();
+
   private final GameWorld world =
       new GameWorld(TileMap.fromResource(GameConfig.MAP_RESOURCE, GameConfig.TILE));
   private final Map<Integer, MessageChannel> clients = new ConcurrentHashMap<>();
   private int nextPlayerId;
 
+  private Server() {}
+
+  public static Server getInstance() {
+    return INSTANCE;
+  }
+
   public static void main(String[] args) throws IOException {
-    new Server().run();
+    Server.getInstance().run();
   }
 
   private void run() throws IOException {

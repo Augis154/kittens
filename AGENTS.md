@@ -18,7 +18,7 @@ intent. Two constraints from it shape everything here:
    **Do not refactor code into design patterns unless asked.** Keeping the core free of rendering
    and socket code is the thing that preserves those seams. Where a pattern already fell out of
    the structure it is named in that class's comment (Template Method / Strategy seam in `Enemy`,
-   Singleton weapons shared by every `Arsenal`, Command in `InputCommand`, Facade in `GameWorld`,
+   Singleton weapons shared by every `Arsenal`, Singleton `Server`, Command in `InputCommand`, Facade in `GameWorld`,
    Game Loop in `ServerLoop`, Flyweight cache in `AssetManager`, Factory in `SpawnDirector`,
    Abstract Factory in `WeaponFactory`); leave those labels accurate when touching the class.
 
