@@ -10,7 +10,13 @@ import java.awt.Graphics2D;
 import java.awt.Shape;
 import java.awt.Stroke;
 import java.awt.image.BufferedImage;
+import java.util.Arrays;
+import kittens.client.settings.Action;
+import kittens.client.settings.AudioPrefs;
+import kittens.client.settings.KeyBindings;
+import kittens.client.settings.Settings;
 import kittens.common.GameConfig;
+import kittens.common.net.PlayerInfo;
 import kittens.common.weapon.Weapon;
 import kittens.common.weapon.WeaponFactory;
 
@@ -32,6 +38,7 @@ final class Hud {
 
   record View(
       int playerId,
+      PlayerInfo me,
       float hp,
       Weapon weapon,
       WeaponFactory family,
@@ -75,7 +82,7 @@ final class Hud {
     drawStatus(g, width, v);
     drawWeaponBar(g, width, height, v);
     drawAmmo(g, width, height, v);
-    drawControls(g, height);
+    drawControls(g, height, v);
     if (!v.downed()) {
       drawCrosshair(g, v);
     }
@@ -126,14 +133,15 @@ final class Hud {
 
   private void drawStatus(Graphics2D g, int width, View v) {
     g.setFont(Theme.FONT_LABEL);
-    String tag = "P" + v.playerId();
+    String tag = v.me() != null ? v.me().name() : "P" + v.playerId();
     String enemies = v.enemyCount() + " hostile" + (v.enemyCount() == 1 ? "" : "s");
     int w = Math.max(Theme.textWidth(g, Theme.FONT_LABEL, tag),
         Theme.textWidth(g, Theme.FONT_SMALL, enemies)) + 28;
     int x = width - MARGIN - w;
     Theme.panel(g, x, MARGIN, w, 52);
 
-    BufferedImage me = assets.kitten(GameConfig.kittenSprite(v.playerId()));
+    BufferedImage me = assets.kitten(v.me() != null ? v.me().color()
+        : GameConfig.kittenSprite(v.playerId()));
     g.drawImage(me, x + 8, MARGIN + 6, 20, 20, null);
     Theme.shadowedText(g, tag, x + 34, MARGIN + 22, Theme.TEXT);
 
@@ -226,9 +234,20 @@ final class Hud {
     }
   }
 
-  private void drawControls(Graphics2D g, int height) {
+  /** Read from the player's bindings, so a rebound key is never advertised under its old name. */
+  private void drawControls(Graphics2D g, int height, View v) {
+    KeyBindings keys = Settings.get().keys();
+    AudioPrefs audio = Settings.get().audio();
+    String[] dirs = {keys.label(Action.MOVE_UP), keys.label(Action.MOVE_LEFT),
+        keys.label(Action.MOVE_DOWN), keys.label(Action.MOVE_RIGHT)};
+    // "WASD" when every key is one letter; "Up/Left/Down/Right" otherwise.
+    String move = String.join(Arrays.stream(dirs).allMatch(d -> d.length() == 1) ? "" : "/", dirs);
+    String sound = audio.muted() ? keys.label(Action.MUTE) + " unmute"
+        : keys.label(Action.MUTE) + " mute · " + keys.label(Action.VOLUME_DOWN) + "/"
+            + keys.label(Action.VOLUME_UP) + " volume " + Math.round(audio.volume() * 100) + "%";
     g.setFont(Theme.FONT_SMALL);
-    Theme.shadowedText(g, "WASD move · mouse aim · click fire · 1-4 weapon · R reload",
+    Theme.shadowedText(g, move + " move · mouse aim · click fire · 1-" + v.family().size()
+        + " weapon · " + keys.label(Action.RELOAD) + " reload · " + sound + " · Esc settings",
         MARGIN, height - MARGIN - 4, Theme.TEXT_FAINT);
   }
 

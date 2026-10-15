@@ -2,10 +2,13 @@ package kittens.client;
 
 import java.io.IOException;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import kittens.client.settings.Profile;
+import kittens.client.settings.Settings;
 import kittens.common.map.TileMap;
 import kittens.common.net.EntityState;
 import kittens.common.net.InputCommand;
@@ -13,6 +16,8 @@ import kittens.common.net.Join;
 import kittens.common.net.JoinAccepted;
 import kittens.common.net.Message;
 import kittens.common.net.MessageChannel;
+import kittens.common.net.PlayerInfo;
+import kittens.common.net.ProfileUpdate;
 import kittens.common.net.Snapshot;
 import kittens.common.weapon.WeaponFactory;
 
@@ -21,18 +26,22 @@ import kittens.common.weapon.WeaponFactory;
  * snapshot as one immutable {@link Frame} so the EDT always reads a consistent picture.
  */
 final class GameClient {
-  /** One received snapshot, indexed by entity id. */
+  /** One received snapshot, with entities and the player roster indexed by id. */
   record Frame(long tick, long ackSeq, int ammo, float reload, int wave, float intermission,
-      Map<Integer, EntityState> entities) {
-    static final Frame EMPTY = new Frame(-1, -1, 0, 0f, 0, 0f, Map.of());
+      Map<Integer, EntityState> entities, Map<Integer, PlayerInfo> players) {
+    static final Frame EMPTY = new Frame(-1, -1, 0, 0f, 0, 0f, Map.of(), Map.of());
 
     static Frame of(Snapshot s) {
       Map<Integer, EntityState> byId = new LinkedHashMap<>();
       for (EntityState e : s.entities()) {
         byId.put(e.id(), e);
       }
+      Map<Integer, PlayerInfo> roster = new HashMap<>();
+      for (PlayerInfo p : s.players()) {
+        roster.put(p.id(), p);
+      }
       return new Frame(s.tick(), s.ackSeq(), s.viewerAmmo(), s.viewerReload(), s.wave(),
-          s.intermission(), Collections.unmodifiableMap(byId));
+          s.intermission(), Collections.unmodifiableMap(byId), Collections.unmodifiableMap(roster));
     }
 
     /** The entity with this id, or {@code null}. */
@@ -54,10 +63,17 @@ final class GameClient {
   }
 
   void start(WeaponFactory family) {
-    channel.send(new Join("kitten", family.name()));
+    Profile me = Settings.get().profile();
+    channel.send(new Join(me.name(), family.name(), me.color()));
     Thread reader = new Thread(() -> channel.readLoop(this::handle), "client-net");
     reader.setDaemon(true);
     reader.start();
+  }
+
+  /** Tells the server the player's current name and colour; it shows on everyone's next tick. */
+  void sendProfile() {
+    Profile me = Settings.get().profile();
+    channel.send(new ProfileUpdate(me.name(), me.color()));
   }
 
   /** Drops the connection; the server removes the player when its reader sees the socket close. */

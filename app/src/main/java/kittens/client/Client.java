@@ -6,16 +6,21 @@ import java.awt.Graphics2D;
 import java.awt.Point;
 import java.awt.RenderingHints;
 import java.awt.Toolkit;
+import java.awt.event.KeyAdapter;
+import java.awt.event.KeyEvent;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.util.function.Consumer;
+import javax.swing.JComponent;
 import javax.swing.JFrame;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import kittens.client.audio.Sound;
 import kittens.client.audio.SoundSystem;
+import kittens.client.settings.DisplayPrefs;
+import kittens.client.settings.Settings;
 import kittens.common.GameConfig;
 import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
@@ -26,12 +31,14 @@ import kittens.common.weapon.WeaponFactory;
 /**
  * The game window: wires {@link InputHandler}, {@link Predictor}, {@link WorldView}, {@link Camera},
  * {@link Renderer} and {@link Hud} together, sends input at {@link GameConfig#TICK_HZ} and renders
- * at {@link #FPS}. Everything here runs on the Swing EDT.
+ * at the player's {@link DisplayPrefs#fps()}. Everything here runs on the Swing EDT.
  */
 public final class Client extends JPanel {
-  private static final int FPS = 180;
-  /** On-screen pixels per world pixel. */
-  private static final float RENDER_SCALE = 1.75f;
+  /**
+   * Captured once: the window is sized at launch and never resized, so a scale changed in the
+   * settings menu waits for the next launch rather than mismatching the window it would draw into.
+   */
+  private static final float RENDER_SCALE = Settings.get().display().renderScale();
   /** How fast the crosshair's fired-recently bloom settles, per second. */
   private static final float BLOOM_DECAY = 7f;
 
@@ -46,6 +53,7 @@ public final class Client extends JPanel {
   private final InputHandler input;
   private final GameClient client;
   private final WeaponFactory family;
+  private final Timer frameTimer;
 
   private long lastFrameNanos;
   private float recoilBloom;
@@ -70,10 +78,48 @@ public final class Client extends JPanel {
     input = new InputHandler(this, camera.windowWidth() / 2, camera.windowHeight() / 2, family);
 
     new Timer(1000 / GameConfig.TICK_HZ, e -> sendInputTick()).start();
-    new Timer(1000 / FPS, e -> {
+    frameTimer = new Timer(1000 / Settings.get().display().fps(), e -> {
       frame();
       repaint();
-    }).start();
+    });
+    frameTimer.start();
+    addKeyListener(new KeyAdapter() {
+      @Override
+      public void keyPressed(KeyEvent e) {
+        if (e.getKeyCode() == KeyEvent.VK_ESCAPE) {
+          openSettings();
+        }
+      }
+    });
+  }
+
+  /**
+   * The match keeps running behind the menu, so the kitten is left standing still rather than
+   * walking on with whatever was held when Esc was pressed. On the way back the name and colour go
+   * to the server unconditionally: one small message, and nothing to track about what changed.
+   */
+  private void openSettings() {
+    input.release();
+    showSettings((JFrame) SwingUtilities.getWindowAncestor(this), this, assets, true, () -> {
+      frameTimer.setDelay(1000 / Settings.get().display().fps());
+      client.sendProfile();
+    });
+  }
+
+  /** Swaps {@code from} for the settings screen; leaving it swaps {@code from} back in. */
+  static void showSettings(JFrame frame, JComponent from, AssetManager assets, boolean inGame,
+      Runnable onReturn) {
+    SettingsMenu menu = new SettingsMenu(windowSize(), assets, inGame, () -> {
+      frame.setContentPane(from);
+      frame.revalidate();
+      frame.repaint();
+      onReturn.run();
+      from.requestFocusInWindow();
+    });
+    frame.setContentPane(menu);
+    frame.revalidate();
+    frame.repaint();
+    menu.requestFocusInWindow();
   }
 
   /** Fixed-rate: hand the current intent to the server and remember it for reconciliation. */
@@ -174,8 +220,9 @@ public final class Client extends JPanel {
   }
 
   private Renderer.Scene scene() {
-    return new Renderer.Scene(client.latest().entities(), client.myPlayerId(), view,
-        predictor.position(), aimAngle(), input.weapon(), camera.visibleTiles());
+    GameClient.Frame f = client.latest();
+    return new Renderer.Scene(f.entities(), client.myPlayerId(), view,
+        predictor.position(), aimAngle(), input.weapon(), camera.visibleTiles(), f.players());
   }
 
   private Hud.View hudView() {
@@ -183,7 +230,8 @@ public final class Client extends JPanel {
     int me = client.myPlayerId();
     EntityState mine = f.entity(me);
     int enemies = (int) f.entities().values().stream().filter(e -> e.kind().isEnemy()).count();
-    return new Hud.View(me, mine == null ? (float) GameConfig.PLAYER_MAX_HEALTH : mine.hp(),
+    return new Hud.View(me, f.players().get(me),
+        mine == null ? (float) GameConfig.PLAYER_MAX_HEALTH : mine.hp(),
         input.weapon(), family, f.ammo(), f.reload(), enemies, f.wave(), f.intermission(),
         me >= 0, localDead(), input.mouseX(), input.mouseY(), recoilBloom);
   }
@@ -226,12 +274,15 @@ public final class Client extends JPanel {
   }
 
   public static void main(String[] args) {
-    SoundSystem.get(); // opens the device and synthesizes here, not in the first EDT frame
+    Settings.get(); // reads the settings file here, not in the first EDT frame
+    SoundSystem.get(); // likewise opens the device and synthesizes
     String host = args.length > 0 ? args[0] : "localhost";
     SwingUtilities.invokeLater(() -> {
       JFrame frame = new JFrame("Kittens");
-      ArsenalMenu menu = new ArsenalMenu(new AssetManager(), windowSize(),
+      AssetManager assets = new AssetManager();
+      ArsenalMenu menu = new ArsenalMenu(assets, windowSize(),
           (family, fail) -> join(frame, host, family, fail));
+      menu.onSettings(() -> showSettings(frame, menu, assets, false, () -> { }));
       frame.add(menu);
       frame.pack();
       frame.setResizable(false);

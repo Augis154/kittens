@@ -13,6 +13,10 @@ import javax.swing.JComponent;
 import javax.swing.Timer;
 import kittens.client.audio.Sound;
 import kittens.client.audio.SoundSystem;
+import kittens.client.settings.Action;
+import kittens.client.settings.AudioPrefs;
+import kittens.client.settings.KeyBindings;
+import kittens.client.settings.Settings;
 import kittens.common.weapon.Weapon;
 import kittens.common.weapon.WeaponFactory;
 
@@ -28,6 +32,7 @@ final class InputHandler {
    */
   private static final int RELEASE_GRACE_MS = 45;
 
+  private final KeyBindings keys = Settings.get().keys();
   private final Set<Integer> held = new HashSet<>();
   private final Map<Integer, Timer> pendingRelease = new HashMap<>();
   private float moveX;
@@ -112,7 +117,17 @@ final class InputHandler {
     return mouseY;
   }
 
-  /** One-shot: true once per R press, then cleared. */
+  /** Drops every held key and button, so nothing stays pressed while another screen has the keyboard. */
+  void release() {
+    pendingRelease.values().forEach(Timer::stop);
+    pendingRelease.clear();
+    held.clear();
+    firing = false;
+    reloadRequested = false;
+    recomputeDirection();
+  }
+
+  /** One-shot: true once per reload press, then cleared. */
   boolean consumeReload() {
     boolean r = reloadRequested;
     reloadRequested = false;
@@ -128,14 +143,23 @@ final class InputHandler {
       }
       return;
     }
-    if (code == KeyEvent.VK_M) {
-      SoundSystem audio = SoundSystem.get();
+    AudioPrefs audio = Settings.get().audio();
+    if (keys.is(Action.MUTE, code)) {
       if (!audio.toggleMuted()) {
-        audio.play(Sound.SWITCH); // audible confirmation it came back on
+        SoundSystem.get().play(Sound.SWITCH); // audible confirmation it came back on
       }
       return;
     }
-    if (code == KeyEvent.VK_R) {
+    if (keys.is(Action.VOLUME_DOWN, code) || keys.is(Action.VOLUME_UP, code)) {
+      if (keys.is(Action.VOLUME_UP, code)) {
+        audio.louder();
+      } else {
+        audio.quieter();
+      }
+      SoundSystem.get().play(Sound.SWITCH); // a sample at the new level
+      return;
+    }
+    if (keys.is(Action.RELOAD, code)) {
       reloadRequested = true;
       return;
     }
@@ -165,9 +189,9 @@ final class InputHandler {
     mouseY = e.getY();
   }
 
-  private boolean down(int... codes) {
-    for (int c : codes) {
-      if (held.contains(c)) {
+  private boolean down(Action action) {
+    for (int c : held) {
+      if (keys.is(action, c)) {
         return true;
       }
     }
@@ -175,9 +199,7 @@ final class InputHandler {
   }
 
   private void recomputeDirection() {
-    moveX = (down(KeyEvent.VK_D, KeyEvent.VK_RIGHT) ? 1f : 0f)
-        - (down(KeyEvent.VK_A, KeyEvent.VK_LEFT) ? 1f : 0f);
-    moveY = (down(KeyEvent.VK_S, KeyEvent.VK_DOWN) ? 1f : 0f)
-        - (down(KeyEvent.VK_W, KeyEvent.VK_UP) ? 1f : 0f);
+    moveX = (down(Action.MOVE_RIGHT) ? 1f : 0f) - (down(Action.MOVE_LEFT) ? 1f : 0f);
+    moveY = (down(Action.MOVE_DOWN) ? 1f : 0f) - (down(Action.MOVE_UP) ? 1f : 0f);
   }
 }

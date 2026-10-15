@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 import javax.swing.JPanel;
+import kittens.client.settings.Settings;
 import kittens.common.weapon.Weapon;
 import kittens.common.weapon.WeaponFactory;
 
@@ -39,6 +40,9 @@ final class ArsenalMenu extends JPanel {
   private int highlight;
   private String error;
   private boolean connecting;
+  private Runnable onSettings = () -> { };
+  /** Where the settings button was last drawn, for clicks. */
+  private Rectangle settingsButton = new Rectangle();
 
   /** Starts joining with {@code family}; must call {@code fail} (on the EDT) if it cannot. */
   interface Chooser {
@@ -48,6 +52,7 @@ final class ArsenalMenu extends JPanel {
   ArsenalMenu(AssetManager assets, Dimension size, Chooser onChoose) {
     this.assets = assets;
     this.onChoose = onChoose;
+    highlight = Math.max(0, families.indexOf(WeaponFactory.named(Settings.get().profile().arsenal())));
     setPreferredSize(size);
     setBackground(Theme.FLOOR);
     setFocusable(true);
@@ -69,6 +74,10 @@ final class ArsenalMenu extends JPanel {
 
       @Override
       public void mouseClicked(MouseEvent e) {
+        if (settingsButton.contains(e.getX(), e.getY())) {
+          openSettings();
+          return;
+        }
         int hit = cardAt(e.getX(), e.getY());
         if (hit >= 0) {
           choose(hit);
@@ -79,7 +88,23 @@ final class ArsenalMenu extends JPanel {
     addMouseMotionListener(mouse);
   }
 
+  /** What S or the settings button does; set once the screen it returns to exists. */
+  void onSettings(Runnable onSettings) {
+    this.onSettings = onSettings;
+  }
+
+  /** Not while connecting: the game is about to replace this screen. */
+  private void openSettings() {
+    if (!connecting) {
+      onSettings.run();
+    }
+  }
+
   private void onKey(int code) {
+    if (code == KeyEvent.VK_S) {
+      openSettings();
+      return;
+    }
     int digit = code - KeyEvent.VK_1;
     if (digit >= 0 && digit < families.size()) {
       choose(digit);
@@ -99,6 +124,7 @@ final class ArsenalMenu extends JPanel {
       return;
     }
     highlight = index;
+    Settings.get().profile().setArsenal(families.get(index).name());
     connecting = true;
     error = null;
     repaint();
@@ -148,8 +174,18 @@ final class ArsenalMenu extends JPanel {
     } else if (error != null) {
       centered(g, error, Theme.FONT_LABEL, footerY - 26, Theme.DANGER);
     }
-    centered(g, "Press 1-" + families.size() + " or click   ·   ←/→ and Enter", Theme.FONT_SMALL,
-        footerY, Theme.TEXT_FAINT);
+    centered(g, "Press 1-" + families.size() + " or click   ·   ←/→ and Enter   ·   S settings",
+        Theme.FONT_SMALL, footerY, Theme.TEXT_FAINT);
+    drawSettingsButton(g);
+  }
+
+  private void drawSettingsButton(Graphics2D g) {
+    String label = "Settings  ·  S";
+    int w = Theme.textWidth(g, Theme.FONT_LABEL, label) + 28;
+    settingsButton = new Rectangle(getWidth() - w - 20, 20, w, 34);
+    Theme.panel(g, settingsButton.x, settingsButton.y, settingsButton.width, settingsButton.height);
+    g.setFont(Theme.FONT_LABEL);
+    Theme.shadowedText(g, label, settingsButton.x + 14, settingsButton.y + 22, Theme.TEXT_DIM);
   }
 
   private void drawCard(Graphics2D g, WeaponFactory family, int index, Rectangle r,

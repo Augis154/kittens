@@ -19,6 +19,7 @@ intent. Two constraints from it shape everything here:
    and socket code is the thing that preserves those seams. Where a pattern already fell out of
    the structure it is named in that class's comment (Template Method / Strategy seam in `Enemy`,
    Singleton weapons shared by every `Arsenal`, Singleton `Server`, Singleton `SoundSystem`,
+   Singleton `Settings`,
    Command in `InputCommand`, Facade in `GameWorld`,
    Game Loop in `ServerLoop`, Flyweight cache in `AssetManager`, Factory in `SpawnDirector`,
    Abstract Factory in `WeaponFactory`, Builder in `TileMap`); leave those labels accurate when
@@ -129,9 +130,12 @@ is the shared simulation both sides run.
   (local-player prediction and reconciliation), `Camera` (viewport, follow, world/screen
   conversion), `WorldView` (between-snapshot smoothing + cosmetic effects), `Renderer` (arena
   drawing), `Hud` (screen-space overlay), `Theme` (palette, fonts, panel/text primitives),
-  `AssetManager`.
+  `AssetManager`, and the two menus: `ArsenalMenu` (pick an arsenal, then join) and `SettingsMenu`.
 - **`client/audio/`** — `SoundSystem` (the public entry point), `Sound`, and the package-private
   `SoundBank` (synthesis), `Mixer` (the output line) and `Voice` (one playing sound).
+- **`client/settings/`** — `Settings` (the public entry point) and its sections `Profile`,
+  `KeyBindings` (with the `Action` enum), `AudioPrefs` and `DisplayPrefs`; `SettingsStore` is the
+  file.
 
 ### Levels
 
@@ -175,7 +179,8 @@ are the same for everyone; they come from `SpawnDirector.wave()`/`intermission()
 through `GameClient.Frame`. The countdown only advances while someone is alive, so it freezes while
 every player is downed.
 
-`Client` renders at 180 FPS but sends input at exactly `TICK_HZ`. `Predictor` applies input to
+`Client` renders at the player's `DisplayPrefs.fps` (180 by default) but sends input at exactly
+`TICK_HZ`. `Predictor` applies input to
 the local player immediately, then on each new snapshot (detected by the `Frame`'s tick changing)
 re-anchors to the authoritative position and replays inputs the server hasn't acked, easing small
 errors and hard-snapping past a threshold.
@@ -194,9 +199,16 @@ players; that path is server-only, so it is free to change.
 
 ### Wire protocol
 
-Newline-delimited JSON over TCP (Gson), four message types only, modelled as a sealed interface plus
-records: `Join`, `JoinAccepted`, `InputCommand`, `Snapshot`. `MessageCodec` wraps each in a
-`{"type":..,"data":..}` envelope so the DTOs stay plain data.
+Newline-delimited JSON over TCP (Gson), five message types only, modelled as a sealed interface plus
+records: `Join`, `JoinAccepted`, `InputCommand`, `Snapshot`, `ProfileUpdate`. `MessageCodec` wraps
+each in a `{"type":..,"data":..}` envelope so the DTOs stay plain data.
+
+Who a player *is* travels apart from where they are. `Join` and `ProfileUpdate` carry a name and a
+kitten colour; the server cleans the name (`GameConfig.cleanName`), resolves the colour
+(`GameConfig.kittenColor`, where "auto" or anything unknown means join order), and every `Snapshot`
+carries the result as a `players` roster of `PlayerInfo` rows. The roster is sent whole each tick
+rather than on change: it is a few bytes per player, needs no catch-up for late joiners, and a rename
+shows on the next tick. Clients draw names and colours only from the roster, never from the id.
 
 `JoinAccepted` is the one message that carries state beyond ids: the level as glyph rows plus its tile
 size, because the server is the only place a level is chosen. Widening an existing record was free —
@@ -228,7 +240,8 @@ the wire stays consistent automatically.
   `MessageChannel.readLoop` and queues inputs into `ServerPlayer.inbox` (a
   `ConcurrentLinkedQueue`); the `server-loop` thread drains them and owns all mutation.
   `GameWorld.players` is the only concurrent collection, because `addPlayer`/`removePlayer` arrive
-  from reader threads; enemies, projectiles, explosions and pickups are plain lists touched by the
+  from reader threads. The one field a reader thread writes on a live player is
+  `ServerPlayer.info`, a volatile `PlayerInfo` replaced whole by `ProfileUpdate`; enemies, projectiles, explosions and pickups are plain lists touched by the
   loop thread only. Keep it that way — adding a concurrent collection there implies a threading
   rule that does not exist.
 - **Snapshot writes happen on the loop thread** and end in a blocking `flush()`. A merely *slow*
@@ -320,7 +333,7 @@ Two rules are worth knowing before touching them:
   (overlay), and anything that has to move between snapshots belongs in `WorldView` — `Renderer` is
   a pure function of a `Renderer.Scene` and owns no mutable state.
 - **Two coordinate spaces per frame, and `Camera` owns the conversion.** `Client.paintComponent`
-  applies the camera (which offsets by the viewport and scales by `RENDER_SCALE`), draws the arena
+  applies the camera (which offsets by the viewport and scales by `DisplayPrefs.renderScale`), draws the arena
   in world coordinates, then restores the transform and hands `Hud` the native window size so HUD
   text stays crisp. Do not reimplement the arithmetic: use `Camera.worldX`/`worldY`, which are exact
   inverses of `Camera.apply`.
@@ -385,15 +398,45 @@ already detects the events. `Sound.shotFor` keys on the weapon wire id, so it fo
 Pass `-Dkittens.audio=off` to a probe that builds a `Client`, or it opens the real device and
 plays through the speakers.
 
+### Settings
+
+`Settings` holds everything the player can change: name, last arsenal, key bindings, volume and
+mute, render scale and frame rate. It is a Singleton because it is backed by one file
+(`~/.kittens/settings.properties`): every save writes all sections from the one in-memory copy, so
+a mute toggled in game and an arsenal remembered by the menu cannot overwrite each other. Read
+settings through `Settings.get()` rather than adding constants to `Client`, `InputHandler` or `Hud`.
+Weapon slots stay on the digit keys and are not bindable.
+
+Players change settings in `SettingsMenu` (S or the button on the arsenal screen, Esc in game), or
+by editing the file while the game is closed. Every change saves at once. They take effect at
+different times:
+- **Immediately:** key bindings, volume and mute.
+- **On returning to the game:** the frame rate, and the name and kitten colour, which `Client` sends as
+  a `ProfileUpdate` every time the menu closes. Before joining they simply ride on `Join`.
+- **Next launch:** the render scale. `Client.RENDER_SCALE` captures it once, because the window is
+  never resized.
+
+The menu's own keys (arrows, Enter, Esc) are fixed so a bad binding can always be undone. Opening it
+in game calls `InputHandler.release()`, because the match keeps running behind it.
+
+`-Dkittens.settings=<path>` points at a different file and `off` keeps everything in memory. Give
+**every probe that builds a `Client`** one of those, or it rewrites the real player's file. Two
+clients on one machine also share the file, and so the name, unless each gets its own path.
+
+`GameConfig.cleanName` limits names to safe characters on both ends: the client applies it so the
+menu shows what others will see, and the server applies it again because it must not trust what
+arrives off the wire.
+
 ## Known rough edges
 
 Not bugs to fix on sight — context so you don't mistake them for accidents:
 
 - **One menu, no lobby.** The design brief asks for `Screen` states (`MainMenu` / `Lobby` /
-  `InGame`). Only `ArsenalMenu` exists, and it is a pre-connect step in `Client.main` rather than a
-  screen state machine, so a client still joins the running match the moment it picks. The arsenal
-  is chosen once and cannot change until the client restarts. `Join.clientName` and
-  `JoinAccepted.mapId` are carried on the wire but read by nobody — they are the seam for the rest.
+  `InGame`). `ArsenalMenu` and `SettingsMenu` are panels that `Client.main` and
+  `Client.showSettings` swap into the frame, not a screen state machine, so a client still joins the
+  running match the moment it picks an arsenal. The arsenal is chosen once and cannot change until
+  the client restarts. `JoinAccepted.mapId` is carried on the wire but read by nobody — it is the
+  seam for the rest.
 - **Enemies and players share the `S` tiles.** There is no separate enemy-spawn glyph, so waves can
   only enter where players also spawn, and `SpawnDirector.MIN_SPAWN_DIST` is the only thing keeping
   them out of the room the players are standing in. A level that wants waves to arrive from a chosen

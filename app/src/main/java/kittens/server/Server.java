@@ -12,6 +12,8 @@ import kittens.common.net.Join;
 import kittens.common.net.JoinAccepted;
 import kittens.common.net.Message;
 import kittens.common.net.MessageChannel;
+import kittens.common.net.PlayerInfo;
+import kittens.common.net.ProfileUpdate;
 import kittens.common.weapon.WeaponFactory;
 
 /**
@@ -85,10 +87,16 @@ public final class Server {
     switch (message) {
       case Join join -> {
         WeaponFactory family = WeaponFactory.named(join.arsenal());
-        world.addPlayer(id, family);
+        PlayerInfo who = world.addPlayer(id, family, join.clientName(), join.color());
         channel.send(new JoinAccepted(id, GameConfig.MAP_ID, level.tileSize(), level.rows()));
-        System.out.println("player " + id + " joined (" + GameConfig.kittenSprite(id) + ", "
-            + family.name() + ")");
+        System.out.println("player " + id + " \"" + who.name() + "\" joined (" + who.color()
+            + ", " + family.name() + ")");
+      }
+      case ProfileUpdate update -> {
+        PlayerInfo who = world.updateProfile(id, update.name(), update.color());
+        if (who != null) {
+          System.out.println("player " + id + " is now \"" + who.name() + "\" (" + who.color() + ")");
+        }
       }
       case InputCommand input -> world.applyInput(id, input);
       default -> System.err.println("unexpected message from player " + id + ": " + message);

@@ -38,6 +38,7 @@ public final class MessageCodec {
       case "joinAccepted" -> GSON.fromJson(data, JoinAccepted.class);
       case "input" -> GSON.fromJson(data, InputCommand.class);
       case "snapshot" -> GSON.fromJson(data, Snapshot.class);
+      case "profile" -> GSON.fromJson(data, ProfileUpdate.class);
       default -> throw new IllegalArgumentException("unknown message type: " + type);
     };
   }
@@ -48,6 +49,7 @@ public final class MessageCodec {
       case JoinAccepted m -> "joinAccepted";
       case InputCommand m -> "input";
       case Snapshot m -> "snapshot";
+      case ProfileUpdate m -> "profile";
     };
   }
 }

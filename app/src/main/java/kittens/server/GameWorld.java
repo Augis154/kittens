@@ -10,6 +10,7 @@ import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
 import kittens.common.net.EntityState;
 import kittens.common.net.InputCommand;
+import kittens.common.net.PlayerInfo;
 import kittens.common.net.Snapshot;
 import kittens.common.sim.PathField;
 import kittens.common.weapon.Weapon;
@@ -37,10 +38,23 @@ final class GameWorld {
     this.map = map;
   }
 
-  void addPlayer(int id, WeaponFactory family) {
+  /** Returns who joined, as the roster will show them: name cleaned, colour resolved. */
+  PlayerInfo addPlayer(int id, WeaponFactory family, String name, String color) {
     List<Vec2> spawns = map.spawnPoints();
-    players.put(id, new ServerPlayer(id, spawns.get(Math.floorMod(id, spawns.size())),
-        family));
+    ServerPlayer player = new ServerPlayer(id, spawns.get(Math.floorMod(id, spawns.size())),
+        family, name, color);
+    players.put(id, player);
+    return player.info();
+  }
+
+  /** Called from a reader thread; returns the new roster entry, or null if the player is gone. */
+  PlayerInfo updateProfile(int id, String name, String color) {
+    ServerPlayer p = players.get(id);
+    if (p == null) {
+      return null;
+    }
+    p.setProfile(name, color);
+    return p.info();
   }
 
   void removePlayer(int id) {
@@ -187,11 +201,15 @@ final class GameWorld {
     }
     int wave = spawnDirector.wave();
     float intermission = (float) spawnDirector.intermission();
+    List<PlayerInfo> roster = new ArrayList<>();
+    for (ServerPlayer p : players.values()) {
+      roster.add(p.info());
+    }
     ServerPlayer viewer = players.get(viewerId);
     if (viewer == null) {
-      return new Snapshot(tick, -1, entities, 0, 0f, wave, intermission);
+      return new Snapshot(tick, -1, entities, 0, 0f, wave, intermission, roster);
     }
     return new Snapshot(tick, viewer.lastProcessedSeq(), entities, viewer.arsenal().ammo(),
-        viewer.arsenal().reloadProgress(), wave, intermission);
+        viewer.arsenal().reloadProgress(), wave, intermission, roster);
   }
 }

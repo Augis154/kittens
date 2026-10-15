@@ -81,10 +81,34 @@ public final class GameConfig {
   public static final float PROJECTILE_KNOCKBACK = 160.0f;
   public static final float KNOCKBACK_DECAY = 8.0f;
 
-  /** Kitten sprite keys, assigned by {@code playerId % length}. */
-  public static final String[] KITTEN_SPRITES = {"orange", "gray", "black", "white"};
+  /** Kitten sprite keys a player can choose; "auto" picks by {@code playerId % length}. */
+  public static final String[] KITTEN_SPRITES = {"orange", "gray", "black", "tabby"};
 
   public static String kittenSprite(int playerId) {
     return KITTEN_SPRITES[Math.floorMod(playerId, KITTEN_SPRITES.length)];
+  }
+
+  /** The colour a player gets: their choice when it names a sprite, otherwise the join-order one. */
+  public static String kittenColor(String requested, int playerId) {
+    for (String sprite : KITTEN_SPRITES) {
+      if (sprite.equals(requested)) {
+        return sprite;
+      }
+    }
+    return kittenSprite(playerId);
+  }
+
+  /** Longest player name either end keeps. */
+  public static final int MAX_NAME_LENGTH = 16;
+
+  /**
+   * A player name reduced to letters, digits, spaces, {@code _} and {@code -}, trimmed and capped.
+   * The client applies it to what it saves; the server applies it again, because a name off the wire
+   * is untrusted.
+   */
+  public static String cleanName(String raw) {
+    String name = raw == null ? "" : raw.replaceAll("[^\\p{L}\\p{N} _-]", "").strip();
+    name = name.length() > MAX_NAME_LENGTH ? name.substring(0, MAX_NAME_LENGTH).strip() : name;
+    return name.isEmpty() ? "kitten" : name;
   }
 }

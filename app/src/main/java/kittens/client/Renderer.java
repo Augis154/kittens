@@ -15,6 +15,7 @@ import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
 import kittens.common.net.EntityKind;
 import kittens.common.net.EntityState;
+import kittens.common.net.PlayerInfo;
 import kittens.common.weapon.Weapon;
 import kittens.common.weapon.WeaponFactory;
 
@@ -39,7 +40,8 @@ final class Renderer {
       Vec2 predicted,
       float aimAngle,
       Weapon localWeapon,
-      Tiles tiles) {}
+      Tiles tiles,
+      Map<Integer, PlayerInfo> players) {}
 
   private final TileMap map;
   private final AssetManager assets;
@@ -145,16 +147,18 @@ final class Renderer {
     }
     for (EntityState e : entities.values()) {
       if (e.kind() == EntityKind.CAT && e.id() != me) {
-        drawKitten(g, e, view.positionOf(e), e.angle(), WeaponFactory.decode(e.weaponId()), false);
+        drawKitten(g, e, view.positionOf(e), e.angle(), WeaponFactory.decode(e.weaponId()), false,
+            scene.players().get(e.id()));
       }
     }
     EntityState mine = entities.get(me);
     if (mine != null) {
       if (scene.predicted() != null) {
-        drawKitten(g, mine, scene.predicted(), scene.aimAngle(), scene.localWeapon(), true);
+        drawKitten(g, mine, scene.predicted(), scene.aimAngle(), scene.localWeapon(), true,
+            scene.players().get(me));
       } else {
         drawKitten(g, mine, Vec2.of(mine.x(), mine.y()), mine.angle(),
-            WeaponFactory.decode(mine.weaponId()), true);
+            WeaponFactory.decode(mine.weaponId()), true, scene.players().get(me));
       }
     }
     for (EntityState e : entities.values()) {
@@ -256,9 +260,12 @@ final class Renderer {
     }
   }
 
+  /** {@code who} is null only for the moment before the first roster arrives. */
   private void drawKitten(Graphics2D g, EntityState state, Vec2 at, float angle, Weapon weapon,
-      boolean self) {
+      boolean self, PlayerInfo who) {
     int id = state.id();
+    String name = who != null ? who.name() : "P" + id;
+    String color = who != null ? who.color() : GameConfig.kittenSprite(id);
     int t = GameConfig.TILE;
     int x = Math.round(at.x - t / 2f);
     int y = Math.round(at.y - t / 2f);
@@ -272,7 +279,7 @@ final class Renderer {
       g.drawLine(x + 6, y + 6, x + t - 6, y + t - 6);
       g.drawLine(x + t - 6, y + 6, x + 6, y + t - 6);
       g.setStroke(baseStroke);
-      nameplate(g, id, at.x, y - 6, Theme.TEXT_DIM);
+      nameplate(g, name, at.x, y - 6, Theme.TEXT_DIM);
       return;
     }
 
@@ -301,7 +308,7 @@ final class Renderer {
       float pulse = (float) (0.5 + 0.5 * Math.sin(System.nanoTime() / 1e9 * rate));
       g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.35f + 0.5f * pulse));
     }
-    drawFlipped(g, assets.kitten(GameConfig.kittenSprite(id)), x, y, t, facingLeft);
+    drawFlipped(g, assets.kitten(color), x, y, t, facingLeft);
 
     // Weapon rotated around the kitten toward the aim.
     int w = 22;
@@ -324,7 +331,7 @@ final class Renderer {
         top = y - 12;
       }
     }
-    nameplate(g, id, at.x, top - 2, self ? Theme.ACCENT : Theme.TEXT);
+    nameplate(g, name, at.x, top - 2, self ? Theme.ACCENT : Theme.TEXT);
   }
 
   private void drawBoom(Graphics2D g, EntityState e) {
@@ -371,10 +378,9 @@ final class Renderer {
     g.fillRoundRect(x, y, Math.max(1, Math.round(width * frac)), 3, 3, 3);
   }
 
-  /** Centred "P&lt;id&gt;" tag on a dark pill. */
-  private static void nameplate(Graphics2D g, int id, float cx, float baselineY, Color color) {
+  /** Centred name tag on a dark pill. */
+  private static void nameplate(Graphics2D g, String tag, float cx, float baselineY, Color color) {
     g.setFont(Theme.FONT_WORLD);
-    String tag = "P" + id;
     int w = Theme.textWidth(g, Theme.FONT_WORLD, tag);
     int x = Math.round(cx - w / 2f);
     int y = Math.round(baselineY);

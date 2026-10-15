@@ -8,6 +8,7 @@ import kittens.common.math.Vec2;
 import kittens.common.net.EntityKind;
 import kittens.common.net.EntityState;
 import kittens.common.net.InputCommand;
+import kittens.common.net.PlayerInfo;
 import kittens.common.sim.Motion;
 import kittens.common.weapon.Arsenal;
 import kittens.common.weapon.WeaponFactory;
@@ -31,12 +32,28 @@ final class ServerPlayer extends Actor {
   /** Spawn grace and the post-hit i-frame share this one timer. */
   private double invulnerableTimer = GameConfig.RESPAWN_INVULNERABILITY;
   private long lastProcessedSeq = -1;
+  /**
+   * The one field written off the loop thread: a reader thread replaces it on a profile change, and
+   * the loop reads it into each snapshot. Swapped whole, so a reader never sees a new name with an old
+   * colour.
+   */
+  private volatile PlayerInfo info;
 
-  ServerPlayer(int id, Vec2 spawn, WeaponFactory family) {
+  ServerPlayer(int id, Vec2 spawn, WeaponFactory family, String name, String color) {
     super(id, spawn, Vec2.of(GameConfig.PLAYER_SIZE, GameConfig.PLAYER_SIZE),
         GameConfig.PLAYER_MAX_HEALTH);
     this.spawn = spawn;
     this.arsenal = family.createArsenal();
+    setProfile(name, color);
+  }
+
+  PlayerInfo info() {
+    return info;
+  }
+
+  /** Untrusted input off the wire: the name is cleaned and the colour resolved here. */
+  void setProfile(String name, String color) {
+    info = new PlayerInfo(id, GameConfig.cleanName(name), GameConfig.kittenColor(color, id));
   }
 
   float aimAngle() {
