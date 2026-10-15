@@ -24,12 +24,21 @@ final class SpawnDirector {
   private static final float MIN_SPAWN_DIST = 520f;
   private static final int MAX_ACTIVE_ENEMIES = 24;
 
+  /**
+   * Difficulty multiplier for each player beyond the first, compounding: 1, 1.5, 2.25, 3.375... It
+   * scales how many enemies a wave has, how many may be alive at once, and how fast they arrive.
+   * Scaling the count alone would only spread the same trickle across more guns.
+   */
+  private static final double PER_PLAYER_SCALE = 1.5;
+
   private final Random random = new Random();
   private final EnemyFactory enemyFactory;
   private int nextEnemyId = GameConfig.ENEMY_ID_BASE;
 
   private int wave;
   private int remainingInWave;
+  /** The player multiplier, fixed when a wave starts so its size cannot drift mid-wave. */
+  private double pressure = 1.0;
   private double spawnCooldown;
   private double intermissionTimer;
   private boolean waveInProgress;
@@ -45,9 +54,13 @@ final class SpawnDirector {
 
   private void prepareWave(int number) {
     wave = number;
-    remainingInWave = 4 + number * 3;
     intermissionTimer = number == 1 ? 2.0 : 3.5;
     waveInProgress = false;
+  }
+
+  /** Multiplier for a match of {@code players}; connected, not just living, so a downed player counts. */
+  static double pressureFor(int players) {
+    return Math.pow(PER_PLAYER_SCALE, Math.max(1, players) - 1);
   }
 
   /** The wave now running, or the one the intermission is counting down to. */
@@ -68,8 +81,12 @@ final class SpawnDirector {
     if (!waveInProgress) {
       intermissionTimer -= dt;
       if (intermissionTimer <= 0) {
+        // Sized here rather than in prepareWave: wave 1 is prepared in the constructor, before
+        // anyone has joined, and a player arriving during an intermission should count.
         waveInProgress = true;
         spawnCooldown = 0;
+        pressure = pressureFor(players.size());
+        remainingInWave = (int) Math.round((4 + 3 * wave) * pressure);
       }
       return null;
     }
@@ -78,10 +95,11 @@ final class SpawnDirector {
       return null;
     }
     spawnCooldown -= dt;
-    if (remainingInWave <= 0 || active.size() >= MAX_ACTIVE_ENEMIES || spawnCooldown > 0) {
+    int maxActive = (int) Math.round(MAX_ACTIVE_ENEMIES * pressure);
+    if (remainingInWave <= 0 || active.size() >= maxActive || spawnCooldown > 0) {
       return null;
     }
-    spawnCooldown = Math.max(0.5, 1.2 - wave * 0.05 + random.nextDouble() * 0.3);
+    spawnCooldown = Math.max(0.5, 1.2 - wave * 0.05 + random.nextDouble() * 0.3) / pressure;
     remainingInWave--;
 
     Vec2 at = selectSpawnPosition(map, players);

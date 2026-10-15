@@ -89,7 +89,10 @@ later assertion silently reads a dead target; a freshly constructed `ServerPlaye
 silently dropped and the probe goes on measuring a player at full health; firing "into open space"
 usually means firing into a wall a few tiles away, so check the map before picking coordinates; and
 enemies spawned already touching their target swing in lockstep, which flatters anything that
-rate-limits damage.
+rate-limits damage; `SpawnDirector.tick` *returns* the enemy it spawned, so a probe that calls it and
+drops the result still spends the wave budget; and players left standing in a `GameWorld` are killed
+within seconds, which stops the director, so a full-world run never reaches the enemy cap — measure
+that by ticking `Enemy` directly against immortal `Actor` targets instead.
 
 To *see* the client instead of measuring it, don't try to screen-grab: under WSLg the X11 root
 window is black, so `ffmpeg -f x11grab` captures nothing. Render the panel offscreen instead — build
@@ -257,6 +260,29 @@ weaving. Both go through two base-class helpers:
 `PathField` is a multi-source BFS distance field over the tile grid, rebuilt by `GameWorld` once per
 tick from every living player and shared by all enemies. Rebuilding is cheaper than caching it
 correctly at this map size and is never stale.
+
+### Waves
+
+`SpawnDirector` runs the wave clock: an intermission, then one enemy at a time until the wave's budget
+is spent, then it waits for every enemy to die before the next intermission. `EnemyFactory` picks the
+kind from a per-wave weighted table; enemy stats never scale, only count, mix and cadence do.
+
+**Difficulty scales with the number of connected players**, by `PER_PLAYER_SCALE` (1.5) compounding per
+extra player: x1, x1.5, x2.25, x3.375. That multiplier ("pressure") applies to three things together —
+the wave's enemy budget, the cap on enemies alive at once, and the spawn rate (the cooldown is divided
+by it). All three, because scaling the count alone just spreads the same trickle across more guns.
+
+- **It is sampled once, when a wave starts**, from `players.size()` — connected, so a downed player
+  still counts and the multiplier does not flicker as people go down and respawn. A player who joins
+  mid-wave does not resize the wave running; they count from the next. Wave 1 is prepared in the
+  constructor before anyone has joined, which is why the budget is set at the end of the intermission
+  rather than in `prepareWave`.
+- **The clock freezes while every player is downed**, including the intermission countdown.
+- Spawn tiles are chosen at least `MIN_SPAWN_DIST` from every *living* player, so enemies can appear
+  near a downed one.
+
+`wave` and `intermission` are published on every `Snapshot`; the multiplier itself is not, so the HUD
+cannot show it.
 
 ### Pickups
 
