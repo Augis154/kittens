@@ -145,7 +145,7 @@ final class Renderer {
     }
     for (EntityState e : entities.values()) {
       if (e.kind() == EntityKind.CAT && e.id() != me) {
-        drawKitten(g, e, view.positionOf(e), e.angle(), WeaponFactory.weapon(e.weaponId()), false);
+        drawKitten(g, e, view.positionOf(e), e.angle(), WeaponFactory.decode(e.weaponId()), false);
       }
     }
     EntityState mine = entities.get(me);
@@ -154,7 +154,7 @@ final class Renderer {
         drawKitten(g, mine, scene.predicted(), scene.aimAngle(), scene.localWeapon(), true);
       } else {
         drawKitten(g, mine, Vec2.of(mine.x(), mine.y()), mine.angle(),
-            WeaponFactory.weapon(mine.weaponId()), true);
+            WeaponFactory.decode(mine.weaponId()), true);
       }
     }
     for (EntityState e : entities.values()) {

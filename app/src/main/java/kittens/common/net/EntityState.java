@@ -6,7 +6,8 @@ package kittens.common.net;
  * <p>Two kinds overload fields instead of widening the record: for {@link EntityKind#BOOM},
  * {@code angle} is the current radius and {@code hp} the final radius; for pickups, {@code hp} is
  * the seconds of life left. {@code invulnerableFor} is a player's remaining damage immunity, so
- * teammates can see who is protected.
+ * teammates can see who is protected. {@code weaponId} is unique across weapon families (see
+ * {@code WeaponFactory.decode}), since players may have chosen different ones.
  */
 public record EntityState(
     int id,

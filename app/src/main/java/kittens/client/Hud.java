@@ -34,6 +34,7 @@ final class Hud {
       int playerId,
       float hp,
       Weapon weapon,
+      WeaponFactory family,
       int ammo,
       float reload,
       int enemyCount,
@@ -126,13 +127,13 @@ final class Hud {
   }
 
   private void drawWeaponBar(Graphics2D g, int width, int height, View v) {
-    int count = WeaponFactory.count();
+    int count = v.family().size();
     int totalW = count * SLOT_W + (count - 1) * SLOT_GAP;
     int x0 = (width - totalW) / 2;
     int y = height - MARGIN - SLOT_H;
 
     for (int i = 0; i < count; i++) {
-      Weapon w = WeaponFactory.weapon(i);
+      Weapon w = v.family().weaponAt(i);
       boolean active = w == v.weapon();
       int x = x0 + i * (SLOT_W + SLOT_GAP);
       int top = active ? y - 6 : y; // the selected slot lifts and takes an accent border

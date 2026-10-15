@@ -32,11 +32,13 @@ final class InputHandler {
   private float moveY;
   private boolean firing;
   private boolean reloadRequested;
-  private int weaponId; // role 0, the sidearm
+  private final WeaponFactory family;
+  private int slot; // 0, the sidearm
   private int mouseX;
   private int mouseY;
 
-  InputHandler(JComponent target, int mouseX, int mouseY) {
+  InputHandler(JComponent target, int mouseX, int mouseY, WeaponFactory family) {
+    this.family = family;
     this.mouseX = mouseX;
     this.mouseY = mouseY;
     target.addKeyListener(new KeyAdapter() {
@@ -91,13 +93,13 @@ final class InputHandler {
     return firing;
   }
 
-  /** Wire id of the selected role; the authoritative selection is the server's. */
-  int weaponId() {
-    return weaponId;
+  /** Position in the chosen arsenal; the authoritative selection is the server's. */
+  int slot() {
+    return slot;
   }
 
   Weapon weapon() {
-    return WeaponFactory.weapon(weaponId);
+    return family.weaponAt(slot);
   }
 
   int mouseX() {
@@ -116,8 +118,8 @@ final class InputHandler {
   }
 
   private void onKeyPressed(int code) {
-    if (code >= KeyEvent.VK_1 && code < KeyEvent.VK_1 + WeaponFactory.count()) {
-      weaponId = code - KeyEvent.VK_1;
+    if (code >= KeyEvent.VK_1 && code < KeyEvent.VK_1 + family.size()) {
+      slot = code - KeyEvent.VK_1;
       return;
     }
     if (code == KeyEvent.VK_R) {

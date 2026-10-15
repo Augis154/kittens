@@ -114,13 +114,14 @@ is the shared simulation both sides run.
 - **`common/`** — `math/` (`Vec2`, `Aabb`), `map/` (`TileMap` and its `Builder`, `Tile`,
   `LevelGenerator`), `entity/`
   (`GameObject` → `Actor` → `Enemy` → `Rat`/`Mouse`, `EnemyFactory`), `weapon/`
-  (`Weapon` → `Pistol`/`Shotgun`/`Rifle`/`Bazooka`, plus `WeaponFactory` and `Arsenal`), `sim/` (`Motion`, `PathField`),
+  (`Weapon`, `WeaponFactory`, `Arsenal`; each family in its own subpackage — `standard/`, `scavenger/`), `sim/` (`Motion`, `PathField`),
   `net/` (the DTOs, `EntityKind`, `MessageCodec`, `MessageChannel`), `GameConfig`.
 - **`server/`** — `Server` (accept loop + per-client reader threads), `ServerLoop`, `GameWorld`,
   `ServerPlayer` (carries a `common.weapon.Arsenal`), `Projectile`, `Explosion`, `Pickup`,
   `SpawnDirector`, `PickupDirector`.
 - **`client/`** — `GameClient` (networking; publishes each snapshot as an immutable `Frame`),
-  `Client` (window, timers, scene assembly), `InputHandler` (keys, mouse, cursor), `Predictor`
+  `Client` (window, timers, scene assembly; its `main` shows `ArsenalMenu` first and only connects
+  once a family is picked), `InputHandler` (keys, mouse, cursor), `Predictor`
   (local-player prediction and reconciliation), `Camera` (viewport, follow, world/screen
   conversion), `WorldView` (between-snapshot smoothing + cosmetic effects), `Renderer` (arena
   drawing), `Hud` (screen-space overlay), `Theme` (palette, fonts, panel/text primitives),
@@ -197,6 +198,11 @@ onto `JoinAccepted` rather than becoming a fifth message type.
 - `kind` is the `EntityKind` enum (`CAT`, `RAT`, `MOUSE`, `BULLET`, `BOOM`, `HEALTH`, `AMMO`),
   serialized by name. Its `isEnemy()`/`isPickup()`/`isActor()` are the only way code should ask
   "what sort of thing is this"; `sprite()` is the lower-case resource name.
+- **`weaponId` is a wire id, not a slot.** It is unique across weapon families
+  (`WeaponFactory.decode`), because a client must draw weapons and bullets belonging to players who
+  chose a different arsenal than its own. `InputCommand.slot` is the other space: a position in the
+  *sender's own* arsenal, resolved server-side, so a client can never select a weapon it does not
+  carry. Don't pass one where the other is expected — both are plain ints.
 - **Two kinds overload the fields** rather than widening the record for everyone: for `BOOM`,
   `angle` carries the current expanding radius and `hp` the final radius; for `HEALTH`/`AMMO`,
   `hp` carries the pickup's remaining lifetime in seconds. Both are read only for presentation. A
@@ -223,7 +229,8 @@ the wire stays consistent automatically.
   everything else (input state, prediction, rendering) is Swing EDT only, driven by two `Timer`s.
   The level is the one other thing the reader thread publishes, once, through a second volatile and a
   `CountDownLatch` — `Client` cannot assemble a camera, renderer or predictor around a map it does not
-  have, so `Client.main` waits for it before building the window on the EDT.
+  have, so `Client.join` waits for it on a `client-join` thread — never the EDT, or the menu would
+  freeze for the wait — and builds the `Client` on the EDT once it arrives.
 
 ### Enemy AI
 
@@ -295,22 +302,29 @@ Two rules are worth knowing before touching them:
   ever has to agree on them.
 - **`Weapon` is tuning and nothing else** — immutable, id-less, and the one exception to
   `GameConfig` for per-weapon numbers. It is abstract with overridable accessors; each concrete
-  weapon (`Pistol`, `Shotgun`, `Rifle`, `Bazooka`) exists only to pass its numbers to the base
-  constructor, and their constructors are package-private.
-- **`WeaponFactory` is the Abstract Factory over the arsenal, and owns the wire ids.** The family
-  in play is the one line `WeaponFactory.ACTIVE`; each concrete family supplies one product per
-  role — sidearm, scattergun, automatic, launcher — and **that role order defines the wire ids**,
-  which are also the hotkeys, the HUD slot order and the magazine indices. Appending a role is safe;
-  reordering renumbers all of those at once. Products are built once and shared by every arsenal, so
-  weapons stay Singletons and code may compare them with `==`. `WeaponFactory.weapon(id)`/`count()`
-  are the decode path for anything holding a wire id (the renderer, the HUD, the client's hotkeys);
-  `StandardWeaponFactory` is package-private, so a new family is a new class in `common/weapon`
-  plus that one line.
+  weapon (e.g. `standard.Pistol`, `scavenger.Nailgun`) exists only to pass its numbers to the base
+  constructor, and its constructor is package-private to its family's subpackage.
+- **`WeaponFactory` is the Abstract Factory over the arsenal, and each player picks one family.**
+  `WeaponFactory.families()` lists them (menu order; the first is also the fallback for an unknown or
+  missing name). Each concrete family supplies one product per role — sidearm, scattergun,
+  automatic, launcher — plus the `name` sent in `Join.arsenal`, and a title and blurb for the menu.
+  The server builds each `ServerPlayer`'s arsenal from that name; the client holds the same family
+  for its hotkeys and HUD. Two id spaces: a **slot** is a position within one family (hotkey, HUD
+  order, magazine index), a **wire id** is `family base + slot`, unique across families, and is what
+  snapshots carry. Appending a role or a family is safe; reordering either renumbers the wire.
+  Products are built once and shared by every arsenal, so weapons stay Singletons and code may
+  compare them with `==`. `WeaponFactory.decode(wireId)` is the decode path for anything reading a
+  snapshot (the renderer, `WorldView`); a family's own `weaponAt(slot)` is for the local player's
+  input and HUD.
+  Each family is a subpackage holding its weapons and its public factory, so a weapon can only be
+  built by the factory beside it; a new one is a new subpackage plus an entry in
+  `WeaponFactory.FAMILIES`. Art mirrors the packages: a weapon's sprite key is `<family>/<name>`,
+  resolving to `resources/weapons/<family>/<name>.png`.
 - **`Arsenal` is what one player carries**, and the only thing a factory hands out: the family, which
-  role is drawn, per-weapon magazines, the reload timer and the fire cooldown. Its ammo state is
+  slot is drawn, per-weapon magazines, the reload timer and the fire cooldown. Its ammo state is
   server-authoritative — only `ServerPlayer` ticks an arsenal, and the client reads its own ammo and
   reload off the snapshot rather than simulating them. Its constructor is package-private, so
-  `WeaponFactory.newArsenal()` is the only way to get one.
+  `WeaponFactory.createArsenal()` is the only way to get one.
 - Entity id ranges keep kinds from colliding: players from 0, enemies from `ENEMY_ID_BASE`,
   projectiles from `PROJECTILE_ID_BASE`, explosions from `EXPLOSION_ID_BASE`.
 - `GameConfig.FRIENDLY_FIRE` is a compile-time `false`, so the player-hit branches in `Projectile`
@@ -328,9 +342,11 @@ Two rules are worth knowing before touching them:
 
 Not bugs to fix on sight — context so you don't mistake them for accidents:
 
-- **No menu, no lobby.** The design brief asks for `Screen` states (`MainMenu` / `Lobby` /
-  `InGame`); none exist, so a client joins the match the moment it connects. `Join.clientName` and
-  `JoinAccepted.mapId` are carried on the wire but read by nobody — they are the seam for that.
+- **One menu, no lobby.** The design brief asks for `Screen` states (`MainMenu` / `Lobby` /
+  `InGame`). Only `ArsenalMenu` exists, and it is a pre-connect step in `Client.main` rather than a
+  screen state machine, so a client still joins the running match the moment it picks. The arsenal
+  is chosen once and cannot change until the client restarts. `Join.clientName` and
+  `JoinAccepted.mapId` are carried on the wire but read by nobody — they are the seam for the rest.
 - **Wave state never reaches the client.** `SpawnDirector`'s wave number and intermission are
   private fields with no accessor; nothing displays them.
 - **Enemies and players share the `S` tiles.** There is no separate enemy-spawn glyph, so waves can

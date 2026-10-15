@@ -1,40 +1,89 @@
 package kittens.common.weapon;
 
+import java.util.List;
+import kittens.common.weapon.scavenger.ScavengerWeaponFactory;
+import kittens.common.weapon.standard.StandardWeaponFactory;
+
 /**
  * Abstract Factory over the arsenal: one factory supplies the whole family of weapon roles a
- * kitten carries, so swapping families is one line here rather than edits at every
+ * kitten carries, so a player's choice of family is one object rather than edits at every
  * {@code new Pistol()}. The roles, not the classes, are the products — a family is free to answer
- * {@link #createAutomatic()} with something other than a {@link Rifle}.
+ * {@link #createAutomatic()} with something other than a rifle.
  *
- * <p>The role order <em>defines</em> the wire ids: {@link #weapon(int)} decodes an id, and an
- * {@link Arsenal} stores its magazines in the same order. Appending a role is therefore the only
- * safe change — reordering renumbers the wire, the magazines and the hotkeys at once.
+ * <p>Two id spaces, deliberately kept apart. A <em>slot</em> is a position within one family: the
+ * hotkey, the HUD order, the magazine index, and what a client asks for in {@code InputCommand}.
+ * A <em>wire id</em> is unique across every family ({@code base + slot}) and is what snapshots
+ * carry, because a client must decode weapons belonging to players who chose a different family
+ * than its own. Appending a role to a family, or a family to {@link #families()}, is safe;
+ * reordering renumbers the wire.
  *
  * <p>Products are built once and shared by every arsenal, which is what keeps weapons Singletons
- * (code compares them with {@code ==}). Weapon constructors are package-private, so concrete
- * families live in this package.
+ * (code compares them with {@code ==}). Each family lives in its own subpackage and keeps its
+ * weapon constructors package-private, so a weapon can only be built by the factory beside it.
  */
 public abstract class WeaponFactory {
-  /** The family in play. Swapping arsenals is this line and nothing else. */
-  private static final WeaponFactory ACTIVE = new StandardWeaponFactory();
+  /** Every family a player can pick, in menu order; the first is also the fallback. */
+  private static final List<WeaponFactory> FAMILIES =
+      List.of(new StandardWeaponFactory(), new ScavengerWeaponFactory());
 
-  /** A fresh arsenal for one player: the active family's weapons, full magazines, sidearm drawn. */
-  public static Arsenal newArsenal() {
-    return ACTIVE.createArsenal();
+  static {
+    int base = 0;
+    for (WeaponFactory family : FAMILIES) {
+      family.base = base;
+      base += family.size();
+    }
   }
 
-  /** The active family's weapon for this wire id, or its sidearm for anything out of range. */
-  public static Weapon weapon(int id) {
-    Weapon[] family = ACTIVE.family();
-    return id < 0 || id >= family.length ? family[0] : family[id];
+  public static List<WeaponFactory> families() {
+    return FAMILIES;
   }
 
-  /** How many roles the active family has; also the number of hotkeys and HUD slots. */
-  public static int count() {
-    return ACTIVE.family().length;
+  /** The family with this {@link #name()}, or the first family for anything unrecognised. */
+  public static WeaponFactory named(String name) {
+    for (WeaponFactory family : FAMILIES) {
+      if (family.name.equalsIgnoreCase(name)) {
+        return family;
+      }
+    }
+    return FAMILIES.get(0);
   }
 
-  private Weapon[] family;
+  /** The weapon behind a snapshot's wire id, or the first family's sidearm for anything unknown. */
+  public static Weapon decode(int wireId) {
+    for (WeaponFactory family : FAMILIES) {
+      if (wireId >= family.base && wireId < family.base + family.size()) {
+        return family.weaponAt(wireId - family.base);
+      }
+    }
+    return FAMILIES.get(0).weaponAt(0);
+  }
+
+  private final String name;
+  private final String title;
+  private final String blurb;
+  private Weapon[] weapons;
+  /** First wire id of this family; set once, in this class's static initialiser. */
+  private int base;
+
+  /** {@code name} is the key sent in {@code Join}; {@code title} and {@code blurb} are for menus. */
+  protected WeaponFactory(String name, String title, String blurb) {
+    this.name = name;
+    this.title = title;
+    this.blurb = blurb;
+  }
+
+  /** Stable lower-case key sent in {@code Join}; also the name of this family's sprite folder. */
+  public final String name() {
+    return name;
+  }
+
+  public final String title() {
+    return title;
+  }
+
+  public final String blurb() {
+    return blurb;
+  }
 
   /** Role 0: the starting sidearm, always available. */
   protected abstract Weapon createSidearm();
@@ -48,17 +97,28 @@ public abstract class WeaponFactory {
   /** Role 3: the explosive launcher. */
   protected abstract Weapon createLauncher();
 
-  /** A new arsenal over this family's shared products. */
-  public final Arsenal createArsenal() {
-    return new Arsenal(family());
+  /** How many slots this family has; also the number of hotkeys and HUD slots it needs. */
+  public final int size() {
+    return weapons().length;
   }
 
-  /** The products in role order, built on first use so every arsenal shares one per role. */
-  private Weapon[] family() {
-    if (family == null) {
-      family = new Weapon[] {createSidearm(), createScattergun(), createAutomatic(),
+  /** The weapon in this slot, or the sidearm for anything out of range. */
+  public final Weapon weaponAt(int slot) {
+    Weapon[] all = weapons();
+    return slot < 0 || slot >= all.length ? all[0] : all[slot];
+  }
+
+  /** A fresh arsenal for one player: this family's weapons, full magazines, sidearm drawn. */
+  public final Arsenal createArsenal() {
+    return new Arsenal(weapons(), base);
+  }
+
+  /** The products in slot order, built on first use so every arsenal shares one per role. */
+  private Weapon[] weapons() {
+    if (weapons == null) {
+      weapons = new Weapon[] {createSidearm(), createScattergun(), createAutomatic(),
           createLauncher()};
     }
-    return family;
+    return weapons;
   }
 }

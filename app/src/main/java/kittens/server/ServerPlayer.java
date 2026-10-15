@@ -23,7 +23,7 @@ final class ServerPlayer extends Actor {
 
   private final Vec2 spawn;
   private final ConcurrentLinkedQueue<InputCommand> inbox = new ConcurrentLinkedQueue<>();
-  private final Arsenal arsenal = WeaponFactory.newArsenal();
+  private final Arsenal arsenal;
 
   private boolean firing;
   private boolean fireRequested;
@@ -32,10 +32,11 @@ final class ServerPlayer extends Actor {
   private double invulnerableTimer = GameConfig.RESPAWN_INVULNERABILITY;
   private long lastProcessedSeq = -1;
 
-  ServerPlayer(int id, Vec2 spawn) {
+  ServerPlayer(int id, Vec2 spawn, WeaponFactory family) {
     super(id, spawn, Vec2.of(GameConfig.PLAYER_SIZE, GameConfig.PLAYER_SIZE),
         GameConfig.PLAYER_MAX_HEALTH);
     this.spawn = spawn;
+    this.arsenal = family.createArsenal();
   }
 
   float aimAngle() {
@@ -79,7 +80,7 @@ final class ServerPlayer extends Actor {
       lastProcessedSeq = cmd.seq();
       facing = cmd.aimAngle();
       firing = cmd.firing();
-      arsenal.select(cmd.weaponId());
+      arsenal.select(cmd.slot());
       if (cmd.reload()) {
         arsenal.requestReload();
       }
@@ -134,6 +135,6 @@ final class ServerPlayer extends Actor {
 
   EntityState toEntityState() {
     return new EntityState(id, EntityKind.CAT, pos.x, pos.y, (float) facing, (float) health,
-        arsenal.selectedId(), (float) invulnerableTimer);
+        arsenal.wireId(), (float) invulnerableTimer);
   }
 }

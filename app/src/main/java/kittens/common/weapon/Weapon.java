@@ -2,8 +2,8 @@ package kittens.common.weapon;
 
 /**
  * A weapon's tuning, and nothing else: immutable, id-less and unaware of the arsenal it ends up
- * in. Subclasses ({@link Pistol}, {@link Shotgun}, {@link Rifle}, {@link Bazooka}) exist only to
- * pass their numbers to this constructor.
+ * in. Subclasses live in their family's subpackage ({@code standard}, {@code scavenger}) and exist
+ * only to pass their numbers to this constructor.
  *
  * <p>{@link WeaponFactory} builds one instance per role and every {@link Arsenal} shares it, so
  * weapons stay Singletons and code may compare them with {@code ==}. Wire ids and per-player ammo
@@ -51,7 +51,7 @@ public abstract class Weapon {
     this.recoil = recoil;
   }
 
-  /** Resource key: {@code weapons/<sprite>.png}. */
+  /** Resource key: {@code weapons/<sprite>.png}, where the sprite names its family's folder. */
   public String sprite() {
     return sprite;
   }

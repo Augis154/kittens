@@ -3,23 +3,25 @@ package kittens.common.weapon;
 /**
  * What one player carries: a {@link WeaponFactory} family, which of it is drawn, and the ammo
  * state that goes with it — per-weapon magazines, the reload timer and the fire cooldown. Built
- * only by a factory, so every player's arsenal indexes the same roles in the same order and an
- * index is the wire id.
+ * only by a factory, so a slot means the same role for every player of the same family.
  *
  * <p>The ammo state is server-authoritative: only {@code ServerPlayer} ticks an arsenal, and the
  * client reads its own ammo and reload off the snapshot instead of simulating them.
  */
 public final class Arsenal {
-  /** Role order, so an index here is the wire id. Shared instances — never mutated. */
+  /** Slot order. Shared instances — never mutated. */
   private final Weapon[] weapons;
+  /** The family's first wire id: a snapshot names a weapon by {@code base + slot}. */
+  private final int base;
   /** Rounds left per weapon, indexed as {@link #weapons}. */
   private final int[] magazine;
   private int selected; // role 0, the sidearm, is what a kitten spawns holding
   private double reloadTimer; // seconds left; 0 = not reloading
   private double fireCooldown;
 
-  Arsenal(Weapon[] weapons) {
+  Arsenal(Weapon[] weapons, int base) {
     this.weapons = weapons;
+    this.base = base;
     this.magazine = new int[weapons.length];
     refill();
   }
@@ -28,19 +30,14 @@ public final class Arsenal {
     return weapons.length;
   }
 
-  /** The weapon at this wire id, or the sidearm for anything out of range. */
-  public Weapon weapon(int id) {
-    return id < 0 || id >= weapons.length ? weapons[0] : weapons[id];
-  }
-
   /** The weapon currently drawn. */
   public Weapon weapon() {
     return weapons[selected];
   }
 
-  /** Wire id of the weapon currently drawn. */
-  public int selectedId() {
-    return selected;
+  /** What a snapshot calls the weapon currently drawn; unique across families, unlike a slot. */
+  public int wireId() {
+    return base + selected;
   }
 
   public int ammo() {
@@ -64,11 +61,11 @@ public final class Arsenal {
   }
 
   /** Switching cancels a reload and cannot be gamed to skip an already-shorter cooldown. */
-  public void select(int id) {
-    if (id < 0 || id >= weapons.length || id == selected) {
+  public void select(int slot) {
+    if (slot < 0 || slot >= weapons.length || slot == selected) {
       return;
     }
-    selected = id;
+    selected = slot;
     reloadTimer = 0;
     fireCooldown = Math.min(fireCooldown, weapon().fireInterval());
   }

@@ -14,6 +14,7 @@ import kittens.common.net.JoinAccepted;
 import kittens.common.net.Message;
 import kittens.common.net.MessageChannel;
 import kittens.common.net.Snapshot;
+import kittens.common.weapon.WeaponFactory;
 
 /**
  * The client's network half: joins, streams {@link InputCommand}s, and publishes the latest
@@ -51,11 +52,16 @@ final class GameClient {
     channel = MessageChannel.connect(host, port);
   }
 
-  void start() {
-    channel.send(new Join("kitten"));
+  void start(WeaponFactory family) {
+    channel.send(new Join("kitten", family.name()));
     Thread reader = new Thread(() -> channel.readLoop(this::handle), "client-net");
     reader.setDaemon(true);
     reader.start();
+  }
+
+  /** Drops the connection; the server removes the player when its reader sees the socket close. */
+  void close() {
+    channel.close();
   }
 
   /** -1 until the server accepts the join. */
@@ -80,9 +86,9 @@ final class GameClient {
   }
 
   /** Sends the current intent; the returned command's {@code seq} is what the predictor remembers. */
-  InputCommand sendInput(float moveX, float moveY, float aimAngle, boolean firing, int weaponId,
+  InputCommand sendInput(float moveX, float moveY, float aimAngle, boolean firing, int slot,
       boolean reload) {
-    InputCommand cmd = new InputCommand(moveX, moveY, aimAngle, firing, weaponId, reload, inputSeq++);
+    InputCommand cmd = new InputCommand(moveX, moveY, aimAngle, firing, slot, reload, inputSeq++);
     channel.send(cmd);
     return cmd;
   }

@@ -13,6 +13,7 @@ import kittens.common.net.InputCommand;
 import kittens.common.net.Snapshot;
 import kittens.common.sim.PathField;
 import kittens.common.weapon.Weapon;
+import kittens.common.weapon.WeaponFactory;
 
 /**
  * The authoritative simulation, a Facade over players, enemies, projectiles, pickups and the map.
@@ -36,9 +37,10 @@ final class GameWorld {
     this.map = map;
   }
 
-  void addPlayer(int id) {
+  void addPlayer(int id, WeaponFactory family) {
     List<Vec2> spawns = map.spawnPoints();
-    players.put(id, new ServerPlayer(id, spawns.get(Math.floorMod(id, spawns.size()))));
+    players.put(id, new ServerPlayer(id, spawns.get(Math.floorMod(id, spawns.size())),
+        family));
   }
 
   void removePlayer(int id) {
@@ -150,7 +152,7 @@ final class GameWorld {
 
   private void fire(ServerPlayer shooter) {
     Weapon w = shooter.arsenal().weapon();
-    int weaponId = shooter.arsenal().selectedId();
+    int weaponId = shooter.arsenal().wireId();
     float base = shooter.aimAngle();
     Vec2 aim = Vec2.fromAngle(base);
     Vec2 muzzle = shooter.pos().add(aim.scale(GameConfig.PLAYER_SIZE * 0.5f + 4f));

@@ -128,7 +128,7 @@ final class WorldView {
       if (e.kind() != EntityKind.BULLET) {
         continue;
       }
-      Weapon weapon = WeaponFactory.weapon(e.weaponId());
+      Weapon weapon = WeaponFactory.decode(e.weaponId());
       Vec2 authority = Vec2.of(e.x(), e.y());
       Bullet b = bullets.get(e.id());
       if (b == null) {

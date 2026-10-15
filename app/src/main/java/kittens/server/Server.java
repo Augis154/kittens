@@ -12,6 +12,7 @@ import kittens.common.net.Join;
 import kittens.common.net.JoinAccepted;
 import kittens.common.net.Message;
 import kittens.common.net.MessageChannel;
+import kittens.common.weapon.WeaponFactory;
 
 /**
  * Accepts sockets on the main thread, reads each client on its own {@code client-<id>} thread, and
@@ -82,10 +83,12 @@ public final class Server {
 
   private void onMessage(int id, MessageChannel channel, Message message) {
     switch (message) {
-      case Join ignored -> {
-        world.addPlayer(id);
+      case Join join -> {
+        WeaponFactory family = WeaponFactory.named(join.arsenal());
+        world.addPlayer(id, family);
         channel.send(new JoinAccepted(id, GameConfig.MAP_ID, level.tileSize(), level.rows()));
-        System.out.println("player " + id + " joined (" + GameConfig.kittenSprite(id) + ")");
+        System.out.println("player " + id + " joined (" + GameConfig.kittenSprite(id) + ", "
+            + family.name() + ")");
       }
       case InputCommand input -> world.applyInput(id, input);
       default -> System.err.println("unexpected message from player " + id + ": " + message);

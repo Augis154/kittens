@@ -9,6 +9,7 @@ import java.awt.Toolkit;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.util.function.Consumer;
 import javax.swing.JFrame;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
@@ -18,6 +19,7 @@ import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
 import kittens.common.net.EntityState;
 import kittens.common.weapon.Weapon;
+import kittens.common.weapon.WeaponFactory;
 
 /**
  * The game window: wires {@link InputHandler}, {@link Predictor}, {@link WorldView}, {@link Camera},
@@ -41,13 +43,15 @@ public final class Client extends JPanel {
   private final Predictor predictor;
   private final InputHandler input;
   private final GameClient client;
+  private final WeaponFactory family;
 
   private long lastFrameNanos;
   private float recoilBloom;
 
-  public Client(GameClient client, TileMap map) {
+  public Client(GameClient client, TileMap map, WeaponFactory family) {
     this.client = client;
     this.map = map;
+    this.family = family;
     // Field initializers run before the constructor body, so anything that needs the map is built
     // here, once the level is known.
     this.camera = new Camera(map, RENDER_SCALE);
@@ -59,7 +63,7 @@ public final class Client extends JPanel {
     // The HUD draws its own crosshair, so hide the arrow pointer.
     setCursor(Toolkit.getDefaultToolkit().createCustomCursor(
         new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB), new Point(0, 0), "blank"));
-    input = new InputHandler(this, camera.windowWidth() / 2, camera.windowHeight() / 2);
+    input = new InputHandler(this, camera.windowWidth() / 2, camera.windowHeight() / 2, family);
 
     new Timer(1000 / GameConfig.TICK_HZ, e -> sendInputTick()).start();
     new Timer(1000 / FPS, e -> {
@@ -74,10 +78,10 @@ public final class Client extends JPanel {
       return;
     }
     float aim = aimAngle();
-    int weaponId = input.weaponId();
+    int slot = input.slot();
     boolean reload = input.consumeReload();
     if (localDead()) {
-      client.sendInput(0f, 0f, aim, false, weaponId, false); // can still aim, cannot move
+      client.sendInput(0f, 0f, aim, false, slot, false); // can still aim, cannot move
       return;
     }
     GameClient.Frame f = client.latest();
@@ -85,7 +89,7 @@ public final class Client extends JPanel {
       recoilBloom = Math.min(1f, recoilBloom + 0.35f);
     }
     predictor.remember(client.sendInput(input.moveX(), input.moveY(), aim, input.firing(),
-        weaponId, reload));
+        slot, reload));
   }
 
   private void frame() {
@@ -159,25 +163,60 @@ public final class Client extends JPanel {
     EntityState mine = f.entity(me);
     int enemies = (int) f.entities().values().stream().filter(e -> e.kind().isEnemy()).count();
     return new Hud.View(me, mine == null ? (float) GameConfig.PLAYER_MAX_HEALTH : mine.hp(),
-        input.weapon(), f.ammo(), f.reload(), enemies, me >= 0, localDead(),
+        input.weapon(), family, f.ammo(), f.reload(), enemies, me >= 0, localDead(),
         input.mouseX(), input.mouseY(), recoilBloom);
   }
 
-  public static void main(String[] args) throws IOException, InterruptedException {
+  /** The window's size, so the arsenal menu and the game fill the same frame. */
+  static Dimension windowSize() {
+    return Camera.windowSize(RENDER_SCALE);
+  }
+
+  /**
+   * Connects with the chosen arsenal, waits for the server's level, then swaps the menu for the
+   * game. The wait blocks, so it runs off the EDT; every outcome is handed back onto it.
+   */
+  private static void join(JFrame frame, String host, WeaponFactory family,
+      Consumer<String> fail) {
+    Thread joiner = new Thread(() -> {
+      GameClient net = null;
+      try {
+        net = new GameClient(host, GameConfig.PORT);
+        net.start(family);
+        TileMap level = net.awaitMap(5000);
+        GameClient joined = net;
+        SwingUtilities.invokeLater(() -> {
+          Client game = new Client(joined, level, family);
+          frame.setContentPane(game);
+          frame.revalidate();
+          game.requestFocusInWindow();
+        });
+      } catch (IOException e) {
+        SwingUtilities.invokeLater(() -> fail.accept("Cannot reach " + host + ":" + GameConfig.PORT));
+      } catch (InterruptedException | IllegalStateException e) {
+        if (net != null) {
+          net.close(); // otherwise the server keeps an idle kitten for a client that gave up
+        }
+        SwingUtilities.invokeLater(() -> fail.accept("The server did not send a level"));
+      }
+    }, "client-join");
+    joiner.setDaemon(true);
+    joiner.start();
+  }
+
+  public static void main(String[] args) {
     String host = args.length > 0 ? args[0] : "localhost";
-    GameClient client = new GameClient(host, GameConfig.PORT);
-    client.start();
-    // The main thread is not the EDT, so waiting for the level here is safe. The window cannot be
-    // assembled around a map it does not have.
-    TileMap level = client.awaitMap(5000);
     SwingUtilities.invokeLater(() -> {
       JFrame frame = new JFrame("Kittens");
-      frame.add(new Client(client, level));
+      ArsenalMenu menu = new ArsenalMenu(new AssetManager(), windowSize(),
+          (family, fail) -> join(frame, host, family, fail));
+      frame.add(menu);
       frame.pack();
       frame.setResizable(false);
       frame.setLocationRelativeTo(null);
       frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
       frame.setVisible(true);
+      menu.requestFocusInWindow();
     });
   }
 }

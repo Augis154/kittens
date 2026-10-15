@@ -1,5 +1,6 @@
 package kittens.client;
 
+import java.awt.Dimension;
 import java.awt.Graphics2D;
 import kittens.common.GameConfig;
 import kittens.common.map.TileMap;
@@ -35,6 +36,12 @@ final class Camera {
     this.viewHeight = VIEW_TILES_Y * GameConfig.TILE;
     this.x = clampX(0f);
     this.y = clampY(0f);
+  }
+
+  /** The window a camera at this scale fills, known without a map so a menu can match it. */
+  static Dimension windowSize(float scale) {
+    return new Dimension(Math.round(VIEW_TILES_X * GameConfig.TILE * scale),
+        Math.round(VIEW_TILES_Y * GameConfig.TILE * scale));
   }
 
   int windowWidth() {
