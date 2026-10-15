@@ -185,11 +185,13 @@ final class GameWorld {
     for (Pickup pk : pickups) {
       entities.add(pk.toEntityState());
     }
+    int wave = spawnDirector.wave();
+    float intermission = (float) spawnDirector.intermission();
     ServerPlayer viewer = players.get(viewerId);
     if (viewer == null) {
-      return new Snapshot(tick, -1, entities, 0, 0f);
+      return new Snapshot(tick, -1, entities, 0, 0f, wave, intermission);
     }
     return new Snapshot(tick, viewer.lastProcessedSeq(), entities, viewer.arsenal().ammo(),
-        viewer.arsenal().reloadProgress());
+        viewer.arsenal().reloadProgress(), wave, intermission);
   }
 }

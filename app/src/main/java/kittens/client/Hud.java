@@ -38,6 +38,8 @@ final class Hud {
       int ammo,
       float reload,
       int enemyCount,
+      int wave,
+      float intermission,
       boolean connected,
       boolean downed,
       int cursorX,
@@ -69,6 +71,7 @@ final class Hud {
     }
 
     drawHearts(g, v, frac);
+    drawWave(g, width, v);
     drawStatus(g, width, v);
     drawWeaponBar(g, width, height, v);
     drawAmmo(g, width, height, v);
@@ -106,6 +109,19 @@ final class Hud {
     g.setFont(Theme.FONT_SMALL);
     String hp = Math.round(Math.ceil(v.hp())) + " / " + (int) GameConfig.PLAYER_MAX_HEALTH;
     Theme.shadowedText(g, hp, x0, y0 + HEART_SIZE + 15, Theme.healthColor(frac));
+  }
+
+  private void drawWave(Graphics2D g, int width, View v) {
+    boolean incoming = v.intermission() > 0f;
+    // Whole seconds, rounded up: a tenths counter ticking at 180 FPS is unreadable noise.
+    String text = incoming
+        ? "WAVE " + v.wave() + "  \u00b7  starts in " + (int) Math.ceil(v.intermission()) + "s"
+        : "WAVE " + v.wave();
+    int w = Theme.textWidth(g, Theme.FONT_LABEL, text) + 28;
+    int x = (width - w) / 2;
+    Theme.panel(g, x, MARGIN, w, 34);
+    g.setFont(Theme.FONT_LABEL);
+    Theme.shadowedText(g, text, x + 14, MARGIN + 22, incoming ? Theme.WARN : Theme.ACCENT);
   }
 
   private void drawStatus(Graphics2D g, int width, View v) {

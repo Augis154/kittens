@@ -184,8 +184,8 @@ public final class Client extends JPanel {
     EntityState mine = f.entity(me);
     int enemies = (int) f.entities().values().stream().filter(e -> e.kind().isEnemy()).count();
     return new Hud.View(me, mine == null ? (float) GameConfig.PLAYER_MAX_HEALTH : mine.hp(),
-        input.weapon(), family, f.ammo(), f.reload(), enemies, me >= 0, localDead(),
-        input.mouseX(), input.mouseY(), recoilBloom);
+        input.weapon(), family, f.ammo(), f.reload(), enemies, f.wave(), f.intermission(),
+        me >= 0, localDead(), input.mouseX(), input.mouseY(), recoilBloom);
   }
 
   /** The window's size, so the arsenal menu and the game fill the same frame. */

@@ -50,6 +50,16 @@ final class SpawnDirector {
     waveInProgress = false;
   }
 
+  /** The wave now running, or the one the intermission is counting down to. */
+  int wave() {
+    return wave;
+  }
+
+  /** Seconds until the next wave starts; 0 while one is running. Frozen while every player is down. */
+  double intermission() {
+    return waveInProgress ? 0 : Math.max(0, intermissionTimer);
+  }
+
   /** Advances the wave clock and returns at most one newly spawned enemy, or {@code null}. */
   Enemy tick(double dt, TileMap map, Collection<ServerPlayer> players, List<Enemy> active) {
     if (players.stream().noneMatch(ServerPlayer::isAlive)) {

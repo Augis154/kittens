@@ -22,16 +22,17 @@ import kittens.common.weapon.WeaponFactory;
  */
 final class GameClient {
   /** One received snapshot, indexed by entity id. */
-  record Frame(long tick, long ackSeq, int ammo, float reload, Map<Integer, EntityState> entities) {
-    static final Frame EMPTY = new Frame(-1, -1, 0, 0f, Map.of());
+  record Frame(long tick, long ackSeq, int ammo, float reload, int wave, float intermission,
+      Map<Integer, EntityState> entities) {
+    static final Frame EMPTY = new Frame(-1, -1, 0, 0f, 0, 0f, Map.of());
 
     static Frame of(Snapshot s) {
       Map<Integer, EntityState> byId = new LinkedHashMap<>();
       for (EntityState e : s.entities()) {
         byId.put(e.id(), e);
       }
-      return new Frame(s.tick(), s.ackSeq(), s.viewerAmmo(), s.viewerReload(),
-          Collections.unmodifiableMap(byId));
+      return new Frame(s.tick(), s.ackSeq(), s.viewerAmmo(), s.viewerReload(), s.wave(),
+          s.intermission(), Collections.unmodifiableMap(byId));
     }
 
     /** The entity with this id, or {@code null}. */

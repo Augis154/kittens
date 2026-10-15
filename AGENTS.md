@@ -167,6 +167,10 @@ footprint so the camera still has somewhere to scroll.
 Each tick `GameWorld.tick(dt)` runs a fixed pipeline — players → weapon fire → pickups → spawn
 director → enemies → projectiles → explosion detonation → cull — then `Server.tick` sends **one
 snapshot per client**, because `ackSeq`, `viewerAmmo`, and `viewerReload` are all recipient-specific.
+`wave` and `intermission` (seconds to the next wave, 0 while one runs) ride on every snapshot too but
+are the same for everyone; they come from `SpawnDirector.wave()`/`intermission()` and reach the HUD
+through `GameClient.Frame`. The countdown only advances while someone is alive, so it freezes while
+every player is downed.
 
 `Client` renders at 180 FPS but sends input at exactly `TICK_HZ`. `Predictor` applies input to
 the local player immediately, then on each new snapshot (detected by the `Frame`'s tick changing)
@@ -364,8 +368,6 @@ Not bugs to fix on sight — context so you don't mistake them for accidents:
   screen state machine, so a client still joins the running match the moment it picks. The arsenal
   is chosen once and cannot change until the client restarts. `Join.clientName` and
   `JoinAccepted.mapId` are carried on the wire but read by nobody — they are the seam for the rest.
-- **Wave state never reaches the client.** `SpawnDirector`'s wave number and intermission are
-  private fields with no accessor; nothing displays them.
 - **Enemies and players share the `S` tiles.** There is no separate enemy-spawn glyph, so waves can
   only enter where players also spawn, and `SpawnDirector.MIN_SPAWN_DIST` is the only thing keeping
   them out of the room the players are standing in. A level that wants waves to arrive from a chosen
