@@ -19,4 +19,13 @@ public enum Tile {
       default -> throw new IllegalArgumentException("unknown tile glyph: '" + c + "'");
     };
   }
+
+  /** The inverse of {@link #fromGlyph}; the glyph a level is written and sent on the wire as. */
+  public char glyph() {
+    return switch (this) {
+      case FLOOR -> '.';
+      case WALL -> '#';
+      case SPAWN -> 'S';
+    };
+  }
 }

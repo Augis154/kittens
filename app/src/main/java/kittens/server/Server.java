@@ -5,6 +5,7 @@ import java.net.ServerSocket;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import kittens.common.GameConfig;
+import kittens.common.map.LevelGenerator;
 import kittens.common.map.TileMap;
 import kittens.common.net.InputCommand;
 import kittens.common.net.Join;
@@ -22,12 +23,30 @@ import kittens.common.net.MessageChannel;
 public final class Server {
   private static final Server INSTANCE = new Server();
 
-  private final GameWorld world =
-      new GameWorld(TileMap.fromResource(GameConfig.MAP_RESOURCE, GameConfig.TILE));
+  private final GameWorld world;
+  /** Built once, so every client sees the same arena; its glyph rows are what goes on the wire. */
+  private final TileMap level;
   private final Map<Integer, MessageChannel> clients = new ConcurrentHashMap<>();
   private int nextPlayerId;
 
-  private Server() {}
+  private Server() {
+    this.level = buildLevel();
+    this.world = new GameWorld(level);
+  }
+
+  /**
+   * The level is assembled here, on the server, and shipped to clients — the only place a level is
+   * ever chosen. Seeded so a run is reproducible; {@code ThreadLocalRandom} would make the same seed
+   * produce a different arena on each start.
+   */
+  private static TileMap buildLevel() {
+    if (!GameConfig.PROCEDURAL_LEVEL) {
+      return TileMap.fromResource(GameConfig.MAP_RESOURCE, GameConfig.TILE);
+    }
+    long seed = GameConfig.LEVEL_SEED == 0L ? System.nanoTime() : GameConfig.LEVEL_SEED;
+    System.out.println("generating level from seed " + seed);
+    return LevelGenerator.generate(seed, GameConfig.TILE);
+  }
 
   public static Server getInstance() {
     return INSTANCE;
@@ -40,8 +59,9 @@ public final class Server {
   private void run() throws IOException {
     new ServerLoop(GameConfig.TICK_HZ, this::tick).start();
     try (ServerSocket serverSocket = new ServerSocket(GameConfig.PORT)) {
-      System.out.println("Server on port " + GameConfig.PORT + ", map " + GameConfig.MAP_ID
-          + " @ " + GameConfig.TICK_HZ + " Hz");
+      System.out.println("Server on port " + GameConfig.PORT + ", map " + GameConfig.MAP_ID + " ("
+          + level.width() + "x" + level.height() + ", " + level.spawnPoints().size() + " entrances) @ "
+          + GameConfig.TICK_HZ + " Hz");
       while (true) {
         MessageChannel channel = new MessageChannel(serverSocket.accept());
         int id = nextPlayerId++;
@@ -64,7 +84,7 @@ public final class Server {
     switch (message) {
       case Join ignored -> {
         world.addPlayer(id);
-        channel.send(new JoinAccepted(id, GameConfig.MAP_ID));
+        channel.send(new JoinAccepted(id, GameConfig.MAP_ID, level.tileSize(), level.rows()));
         System.out.println("player " + id + " joined (" + GameConfig.kittenSprite(id) + ")");
       }
       case InputCommand input -> world.applyInput(id, input);

@@ -4,6 +4,9 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import kittens.common.map.TileMap;
 import kittens.common.net.EntityState;
 import kittens.common.net.InputCommand;
 import kittens.common.net.Join;
@@ -40,6 +43,9 @@ final class GameClient {
   private long inputSeq; // EDT only
   private volatile int myPlayerId = -1;
   private volatile Frame latest = Frame.EMPTY;
+  /** Published once, by the reader thread, when the server's level arrives. */
+  private volatile TileMap map;
+  private final CountDownLatch mapLatch = new CountDownLatch(1);
 
   GameClient(String host, int port) throws IOException {
     channel = MessageChannel.connect(host, port);
@@ -57,6 +63,18 @@ final class GameClient {
     return myPlayerId;
   }
 
+  /**
+   * Blocks until the server's level arrives. Nothing on the client can be assembled around a map it
+   * does not have yet — the camera, renderer and predictor all take one — so the window is built after
+   * this returns.
+   */
+  TileMap awaitMap(long timeoutMillis) throws InterruptedException {
+    if (!mapLatch.await(timeoutMillis, TimeUnit.MILLISECONDS)) {
+      throw new IllegalStateException("server did not send the level within " + timeoutMillis + " ms");
+    }
+    return map;
+  }
+
   Frame latest() {
     return latest;
   }
@@ -71,7 +89,12 @@ final class GameClient {
 
   private void handle(Message message) {
     switch (message) {
-      case JoinAccepted accepted -> myPlayerId = accepted.playerId();
+      case JoinAccepted accepted -> {
+        myPlayerId = accepted.playerId();
+        // Rebuilt through the same Builder path the server used, so both ends hold the same shape.
+        map = TileMap.fromText(String.join("\n", accepted.rows()), accepted.tileSize());
+        mapLatch.countDown();
+      }
       case Snapshot snapshot -> latest = Frame.of(snapshot);
       default -> {} // Join / InputCommand only travel the other way
     }

@@ -31,21 +31,28 @@ public final class Client extends JPanel {
   /** How fast the crosshair's fired-recently bloom settles, per second. */
   private static final float BLOOM_DECAY = 7f;
 
-  private final TileMap map = TileMap.fromResource(GameConfig.MAP_RESOURCE, GameConfig.TILE);
+  /** The level the server sent, not a resource both ends load independently. */
+  private final TileMap map;
   private final AssetManager assets = new AssetManager();
-  private final Camera camera = new Camera(map, RENDER_SCALE);
-  private final Renderer renderer = new Renderer(map, assets);
+  private final Camera camera;
+  private final Renderer renderer;
   private final Hud hud = new Hud(assets);
   private final WorldView view = new WorldView();
-  private final Predictor predictor = new Predictor(map);
+  private final Predictor predictor;
   private final InputHandler input;
   private final GameClient client;
 
   private long lastFrameNanos;
   private float recoilBloom;
 
-  public Client(GameClient client) {
+  public Client(GameClient client, TileMap map) {
     this.client = client;
+    this.map = map;
+    // Field initializers run before the constructor body, so anything that needs the map is built
+    // here, once the level is known.
+    this.camera = new Camera(map, RENDER_SCALE);
+    this.renderer = new Renderer(map, assets);
+    this.predictor = new Predictor(map);
     setPreferredSize(new Dimension(camera.windowWidth(), camera.windowHeight()));
     setBackground(Theme.FLOOR);
     setFocusable(true);
@@ -156,13 +163,16 @@ public final class Client extends JPanel {
         input.mouseX(), input.mouseY(), recoilBloom);
   }
 
-  public static void main(String[] args) throws IOException {
+  public static void main(String[] args) throws IOException, InterruptedException {
     String host = args.length > 0 ? args[0] : "localhost";
     GameClient client = new GameClient(host, GameConfig.PORT);
     client.start();
+    // The main thread is not the EDT, so waiting for the level here is safe. The window cannot be
+    // assembled around a map it does not have.
+    TileMap level = client.awaitMap(5000);
     SwingUtilities.invokeLater(() -> {
       JFrame frame = new JFrame("Kittens");
-      frame.add(new Client(client));
+      frame.add(new Client(client, level));
       frame.pack();
       frame.setResizable(false);
       frame.setLocationRelativeTo(null);

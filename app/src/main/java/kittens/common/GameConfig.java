@@ -10,6 +10,18 @@ public final class GameConfig {
   /** {@code maps/arena.txt} is the older single-screen map, kept for probes. */
   public static final String MAP_RESOURCE = "maps/sewers.txt";
 
+  /**
+   * When true the server assembles the level with {@code common/map/LevelGenerator} instead of loading
+   * {@link #MAP_RESOURCE}, and sends the assembled level to clients on join.
+   */
+  public static final boolean PROCEDURAL_LEVEL = true;
+  /**
+   * 0 means draw from the clock; any other value makes a generated level reproducible. This is the one
+   * value here that only the server reads, because clients receive the level over the wire rather than
+   * deriving it, so they never have to agree on a seed.
+   */
+  public static final long LEVEL_SEED = 0L;
+
   /** Pixel size of one map tile; also the size kitten sprites are drawn at. */
   public static final int TILE = 32;
 

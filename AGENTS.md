@@ -20,7 +20,8 @@ intent. Two constraints from it shape everything here:
    the structure it is named in that class's comment (Template Method / Strategy seam in `Enemy`,
    Singleton weapons shared by every `Arsenal`, Singleton `Server`, Command in `InputCommand`, Facade in `GameWorld`,
    Game Loop in `ServerLoop`, Flyweight cache in `AssetManager`, Factory in `SpawnDirector`,
-   Abstract Factory in `WeaponFactory`); leave those labels accurate when touching the class.
+   Abstract Factory in `WeaponFactory`, Builder in `TileMap`); leave those labels accurate when
+   touching the class.
 
 ## Keeping this file current
 
@@ -110,7 +111,8 @@ rendering, and the only socket code in it is `common/net/MessageChannel`** — t
 knows the wire is newline-delimited JSON over TCP, used by both ends. Everything else in `common`
 is the shared simulation both sides run.
 
-- **`common/`** — `math/` (`Vec2`, `Aabb`), `map/` (`TileMap`, `Tile`), `entity/`
+- **`common/`** — `math/` (`Vec2`, `Aabb`), `map/` (`TileMap` and its `Builder`, `Tile`,
+  `LevelGenerator`), `entity/`
   (`GameObject` → `Actor` → `Enemy` → `Rat`/`Mouse`, `EnemyFactory`), `weapon/`
   (`Weapon` → `Pistol`/`Shotgun`/`Rifle`/`Bazooka`, plus `WeaponFactory` and `Arsenal`), `sim/` (`Motion`, `PathField`),
   `net/` (the DTOs, `EntityKind`, `MessageCodec`, `MessageChannel`), `GameConfig`.
@@ -126,21 +128,34 @@ is the shared simulation both sides run.
 
 ### Levels
 
-Plain text loaded by `TileMap`, one character per tile: `.` floor, `#` wall, `S` spawn.
-`GameConfig.MAP_RESOURCE` picks which one. `maps/sewers.txt` is the default — 60x36 tiles (four
-rooms, a central hub, a corridor ring), deliberately larger than the 25x15-tile viewport so the
-camera has somewhere to scroll. `maps/arena.txt` is the original single-screen map, exactly one
-viewport, which is why it stays around for probes.
+A level is only ever made by `TileMap.Builder` (Builder pattern): `fromText`/`fromResource` are the
+text path and `LevelGenerator` the procedural one, and both route through the same builder. The
+builder is the mutable phase and `TileMap` stays immutable after `build()`, which is the only place a
+level is validated and the only place `spawnPoints()` and `floorPoints()` can be derived — a grid
+assembled cell by cell has no parse loop to derive them in, and `floorPoints` is the pool
+`PickupDirector` samples. Nothing outside `build()` may compute those lists.
 
-Plain `.` floor is also where pickups land: `TileMap.floorPoints()` is every open cell that is
-*not* a spawn point, precomputed at load, and `PickupDirector` samples it. So marking a cell `S`
-takes it out of the pickup pool as well as adding a wave entrance.
+`build()` now checks the rules this section used to warn were unchecked: rectangular, sealed by walls on
+every edge, all open cells mutually reachable, and at least one spawn (`GameWorld.addPlayer` indexes
+`spawnPoints` directly). Corridor width is deliberately *not* checked — a design preference is not a
+property a grid can be tested for, so `LevelGenerator` guarantees the 2-wide paths (a rat's box is 22px
+against a 32px tile) by construction instead. A generator that fails validation should be fixed by
+drawing a new seed, not by a builder that silently repairs the level, which would hide which rule the
+generator breaks.
 
-A level has to be rectangular, sealed by walls on every edge, and have all its open cells mutually
-reachable — **nothing checks any of this at load time**, so a level with a walled-off room simply
-strands enemies and pickups in it. Corridors want to be at least 2 tiles wide (a rat's box is 22px
-against a 32px tile), and avoiding lanes that run the full width or height keeps sightlines from
-dominating.
+`GameConfig.PROCEDURAL_LEVEL` picks which path: rooms placed with a seeded `Random` (never
+`ThreadLocalRandom`, so a seed reproduces a level), chained into a ring by 2-wide corridors, one `S` per
+room. `LEVEL_SEED` 0 means the clock. The server is the only place a level is chosen and it **sends the
+assembled level over the wire** as glyph rows, so the client never runs the generator and never has to
+agree on a seed; `TileMap.rows()` is the wire shape and `fromText` is its inverse. With procedural
+generation off, `GameConfig.MAP_RESOURCE` picks the hand-authored map instead.
+
+Plain `.` floor is also where pickups land: `floorPoints()` is every open cell that is *not* a spawn, so
+marking a cell `S` takes it out of the pickup pool as well as adding a wave entrance.
+
+`maps/sewers.txt` (60x36, four rooms, a central hub, a corridor ring) and `maps/arena.txt` (exactly one
+viewport, kept for probes) both pass `build()`'s checks, and generated levels use the same 60x36
+footprint so the camera still has somewhere to scroll.
 
 ### Authority and prediction
 
@@ -172,6 +187,11 @@ Newline-delimited JSON over TCP (Gson), four message types only, modelled as a s
 records: `Join`, `JoinAccepted`, `InputCommand`, `Snapshot`. `MessageCodec` wraps each in a
 `{"type":..,"data":..}` envelope so the DTOs stay plain data.
 
+`JoinAccepted` is the one message that carries state beyond ids: the level as glyph rows plus its tile
+size, because the server is the only place a level is chosen. Widening an existing record was free —
+Gson serializes by field and `MessageCodec`'s two switches need no change — which is why the level went
+onto `JoinAccepted` rather than becoming a fifth message type.
+
 `EntityState` is one flat render-ready row. Two conventions to know:
 
 - `kind` is the `EntityKind` enum (`CAT`, `RAT`, `MOUSE`, `BULLET`, `BOOM`, `HEALTH`, `AMMO`),
@@ -201,6 +221,9 @@ the wire stays consistent automatically.
 - **Client:** the `client-net` reader thread publishes each snapshot as one immutable
   `GameClient.Frame` through a single volatile, so a render frame never sees half a snapshot;
   everything else (input state, prediction, rendering) is Swing EDT only, driven by two `Timer`s.
+  The level is the one other thing the reader thread publishes, once, through a second volatile and a
+  `CountDownLatch` — `Client` cannot assemble a camera, renderer or predictor around a map it does not
+  have, so `Client.main` waits for it before building the window on the EDT.
 
 ### Enemy AI
 
@@ -314,4 +337,8 @@ Not bugs to fix on sight — context so you don't mistake them for accidents:
   only enter where players also spawn, and `SpawnDirector.MIN_SPAWN_DIST` is the only thing keeping
   them out of the room the players are standing in. A level that wants waves to arrive from a chosen
   direction needs a new `Tile` kind.
+- **The generator does not guarantee spawn spacing.** `SpawnDirector.MIN_SPAWN_DIST` is a private
+  constant `LevelGenerator` cannot see, so on a level whose rooms sit close every wave takes the
+  "farthest point" fallback and arrives in view. Measured over 3000 seeds the closest pair of entrances
+  ranges from 256 to 560 px against the 520 px threshold.
 - Guava is a declared dependency but unused.
