@@ -3,9 +3,13 @@ package kittens.client;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import kittens.client.audio.Sound;
+import kittens.client.audio.SoundSystem;
 import kittens.common.GameConfig;
 import kittens.common.math.Vec2;
 import kittens.common.net.EntityKind;
@@ -16,8 +20,8 @@ import kittens.common.weapon.WeaponFactory;
 /**
  * Cosmetic smoothing of everything the local player does <em>not</em> control: remote actors are
  * eased toward their snapshot positions, bullets are dead-reckoned between snapshots, and health
- * drops and vanishing pickups become effects. Nothing here feeds prediction, so it can be retuned
- * freely without desync risk.
+ * drops and vanishing pickups become effects and sounds. Nothing here feeds prediction, so it can be
+ * retuned freely without desync risk.
  */
 final class WorldView {
   private static final float REMOTE_SMOOTHING = 0.30f;
@@ -78,8 +82,9 @@ final class WorldView {
   private final Map<Integer, Vec2> smoothed = new HashMap<>();
   private final Map<Integer, Bullet> bullets = new HashMap<>();
   private final Map<Integer, PickupSeen> pickupSeen = new HashMap<>();
-  private final Map<Integer, Float> enemyHp = new HashMap<>();
+  private final Map<Integer, EntityState> enemyLast = new HashMap<>();
   private final Map<Integer, Float> enemyFlash = new HashMap<>();
+  private final Set<Integer> blastsHeard = new HashSet<>();
   private final List<Fx> effects = new ArrayList<>();
 
   void update(double dt, Map<Integer, EntityState> entities, int myPlayerId) {
@@ -87,6 +92,7 @@ final class WorldView {
     updateBullets(dt, entities);
     trackEnemyDamage(entities);
     trackPickups(entities);
+    hearBlasts(entities);
     advanceEffects(dt);
   }
 
@@ -138,6 +144,7 @@ final class WorldView {
         float back = (float) (weapon.projectileSpeed() * GameConfig.TICK_DT);
         effects.add(new Fx(Fx.Kind.MUZZLE, authority.sub(Vec2.fromAngle(e.angle()).scale(back)),
             e.angle(), 0, weapon.explosive(), 0.09f));
+        SoundSystem.get().playAt(Sound.shotFor(e.weaponId()), authority);
       } else {
         Vec2 pos = authority.distance(b.pos()) > BULLET_SNAP
             ? authority
@@ -150,23 +157,34 @@ final class WorldView {
     }
   }
 
-  /** Health drops between snapshots become a flash and a floating number, each hit exactly once. */
+  /**
+   * Health drops between snapshots become a flash, a floating number and a thud, each hit exactly
+   * once; an enemy dropping out of the snapshot was killed, and squeaks where it was last seen.
+   */
   private void trackEnemyDamage(Map<Integer, EntityState> live) {
-    enemyHp.keySet().removeIf(id -> !live.containsKey(id));
+    Iterator<Map.Entry<Integer, EntityState>> it = enemyLast.entrySet().iterator();
+    while (it.hasNext()) {
+      EntityState gone = it.next().getValue();
+      if (!live.containsKey(gone.id())) {
+        SoundSystem.get().playAt(Sound.SQUEAK, Vec2.of(gone.x(), gone.y()));
+        it.remove();
+      }
+    }
     enemyFlash.keySet().removeIf(id -> !live.containsKey(id));
     for (EntityState e : live.values()) {
       if (!e.kind().isEnemy()) {
         continue;
       }
-      Float previous = enemyHp.put(e.id(), e.hp());
-      if (previous == null || e.hp() >= previous) {
+      EntityState previous = enemyLast.put(e.id(), e);
+      if (previous == null || e.hp() >= previous.hp()) {
         continue;
       }
       Vec2 at = positionOf(e);
       enemyFlash.put(e.id(), HIT_FLASH_SECONDS);
       effects.add(new Fx(Fx.Kind.HIT, at, 0f, 0, false, 0.22f));
       effects.add(new Fx(Fx.Kind.DAMAGE, at.sub(Vec2.of(0f, GameConfig.TILE * 0.4f)), 0f,
-          Math.max(1, Math.round(previous - e.hp())), false, 0.7f));
+          Math.max(1, Math.round(previous.hp() - e.hp())), false, 0.7f));
+      SoundSystem.get().playAt(Sound.HIT, at);
     }
   }
 
@@ -181,6 +199,7 @@ final class WorldView {
       PickupSeen last = entry.getValue();
       if (last.life() > PICKUP_TAKEN_LIFE) {
         effects.add(new Fx(Fx.Kind.PICKUP, last.pos(), 0f, 0, last.health(), 0.34f));
+        SoundSystem.get().playAt(last.health() ? Sound.HEAL : Sound.AMMO, last.pos());
       }
       it.remove();
     }
@@ -188,6 +207,16 @@ final class WorldView {
       if (e.kind().isPickup()) {
         pickupSeen.put(e.id(),
             new PickupSeen(Vec2.of(e.x(), e.y()), e.hp(), e.kind() == EntityKind.HEALTH));
+      }
+    }
+  }
+
+  /** Each explosion is heard once, on the snapshot it first appears in. */
+  private void hearBlasts(Map<Integer, EntityState> live) {
+    blastsHeard.removeIf(id -> !live.containsKey(id));
+    for (EntityState e : live.values()) {
+      if (e.kind() == EntityKind.BOOM && blastsHeard.add(e.id())) {
+        SoundSystem.get().playAt(Sound.BOOM, Vec2.of(e.x(), e.y()));
       }
     }
   }

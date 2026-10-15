@@ -18,7 +18,7 @@ intent. Two constraints from it shape everything here:
    **Do not refactor code into design patterns unless asked.** Keeping the core free of rendering
    and socket code is the thing that preserves those seams. Where a pattern already fell out of
    the structure it is named in that class's comment (Template Method / Strategy seam in `Enemy`,
-   Singleton weapons shared by every `Arsenal`, Command in `InputCommand`, Facade in `GameWorld`,
+   Singleton weapons shared by every `Arsenal`, Singleton `SoundSystem`, Command in `InputCommand`, Facade in `GameWorld`,
    Game Loop in `ServerLoop`, Flyweight cache in `AssetManager`, Factory in `SpawnDirector`,
    Abstract Factory in `WeaponFactory`); leave those labels accurate when touching the class.
 
@@ -123,6 +123,8 @@ is the shared simulation both sides run.
   conversion), `WorldView` (between-snapshot smoothing + cosmetic effects), `Renderer` (arena
   drawing), `Hud` (screen-space overlay), `Theme` (palette, fonts, panel/text primitives),
   `AssetManager`.
+- **`client/audio/`** — `SoundSystem` (the public entry point), `Sound`, and the package-private
+  `SoundBank` (synthesis), `Mixer` (the output line) and `Voice` (one playing sound).
 
 ### Levels
 
@@ -201,6 +203,8 @@ the wire stays consistent automatically.
 - **Client:** the `client-net` reader thread publishes each snapshot as one immutable
   `GameClient.Frame` through a single volatile, so a render frame never sees half a snapshot;
   everything else (input state, prediction, rendering) is Swing EDT only, driven by two `Timer`s.
+  The exception is audio: an `audio-mixer` daemon thread owns the output line, and
+  `SoundSystem.play`/`playAt` hand it voices through a queue, so they are safe from any thread.
 
 ### Enemy AI
 
@@ -300,6 +304,18 @@ Two rules are worth knowing before touching them:
   likewise lives once, on `Actor` (`applyKnockback`/`decayKnockback`), for players and enemies alike.
 - **Comments say why, not what.** The essays are gone on purpose; add a comment only for a
   non-obvious trade-off or trap, and keep the pattern labels (see the constraint at the top).
+
+### Audio
+
+`SoundSystem` is the one owner of the sound device, reached through `SoundSystem.get()` rather than
+threaded through constructors. `SoundBank` synthesizes every `Sound` in code (there are no audio
+files), and `Mixer` mixes all voices in software into a single `SourceDataLine` instead of opening a
+`Clip` per shot. Cues are raised from `WorldView`, `Client` and `InputHandler`, where the client
+already detects the events. `Sound.shotFor` keys on the weapon wire id, so it follows the
+`WeaponFactory` role order like the hotkeys and HUD slots do.
+
+Pass `-Dkittens.audio=off` to a probe that builds a `Client`, or it opens the real device and
+plays through the speakers.
 
 ## Known rough edges
 

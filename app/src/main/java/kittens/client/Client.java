@@ -13,6 +13,8 @@ import javax.swing.JFrame;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
+import kittens.client.audio.Sound;
+import kittens.client.audio.SoundSystem;
 import kittens.common.GameConfig;
 import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
@@ -43,6 +45,8 @@ public final class Client extends JPanel {
 
   private long lastFrameNanos;
   private float recoilBloom;
+  private float heardHp = Float.NaN;
+  private float heardReload;
 
   public Client(GameClient client) {
     this.client = client;
@@ -88,10 +92,27 @@ public final class Client extends JPanel {
 
     GameClient.Frame f = client.latest();
     int me = client.myPlayerId();
-    predictor.update(dt, f, f.entity(me), input.moveX(), input.moveY());
+    EntityState mine = f.entity(me);
+    predictor.update(dt, f, mine, input.moveX(), input.moveY());
     view.update(dt, f.entities(), me);
-    camera.follow(cameraTarget(f), dt);
+    Vec2 target = cameraTarget(f);
+    camera.follow(target, dt);
+    SoundSystem.get().listenAt(target);
+    cueLocalSounds(f, mine);
     recoilBloom = Math.max(0f, recoilBloom - (float) (BLOOM_DECAY * dt));
+  }
+
+  /** The local kitten's own cues, which come off the snapshot rather than from anything seen. */
+  private void cueLocalSounds(GameClient.Frame f, EntityState mine) {
+    float hp = mine == null ? Float.NaN : mine.hp();
+    if (hp < heardHp) {
+      SoundSystem.get().play(Sound.HURT);
+    }
+    heardHp = hp;
+    if (f.reload() > 0f && heardReload <= 0f) {
+      SoundSystem.get().play(Sound.RELOAD);
+    }
+    heardReload = f.reload();
   }
 
   /** Angle from the local kitten to the cursor, both in world space. */
@@ -157,6 +178,7 @@ public final class Client extends JPanel {
   }
 
   public static void main(String[] args) throws IOException {
+    SoundSystem.get(); // opens the device and synthesizes here, not in the first EDT frame
     String host = args.length > 0 ? args[0] : "localhost";
     GameClient client = new GameClient(host, GameConfig.PORT);
     client.start();
