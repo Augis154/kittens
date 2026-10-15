@@ -58,6 +58,16 @@ public abstract class WeaponFactory {
     return FAMILIES.get(0).weaponAt(0);
   }
 
+  /** The slot (role) a wire id occupies within its family, or 0 for anything unknown. */
+  public static int slotOf(int wireId) {
+    for (WeaponFactory family : FAMILIES) {
+      if (wireId >= family.base && wireId < family.base + family.size()) {
+        return wireId - family.base;
+      }
+    }
+    return 0;
+  }
+
   private final String name;
   private final String title;
   private final String blurb;

@@ -11,6 +11,8 @@ import java.util.Map;
 import java.util.Set;
 import javax.swing.JComponent;
 import javax.swing.Timer;
+import kittens.client.audio.Sound;
+import kittens.client.audio.SoundSystem;
 import kittens.common.weapon.Weapon;
 import kittens.common.weapon.WeaponFactory;
 
@@ -119,7 +121,18 @@ final class InputHandler {
 
   private void onKeyPressed(int code) {
     if (code >= KeyEvent.VK_1 && code < KeyEvent.VK_1 + family.size()) {
-      slot = code - KeyEvent.VK_1;
+      int chosen = code - KeyEvent.VK_1;
+      if (slot != chosen) {
+        slot = chosen;
+        SoundSystem.get().play(Sound.SWITCH);
+      }
+      return;
+    }
+    if (code == KeyEvent.VK_M) {
+      SoundSystem audio = SoundSystem.get();
+      if (!audio.toggleMuted()) {
+        audio.play(Sound.SWITCH); // audible confirmation it came back on
+      }
       return;
     }
     if (code == KeyEvent.VK_R) {
