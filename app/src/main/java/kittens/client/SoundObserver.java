@@ -23,10 +23,18 @@ final class SoundObserver implements GameObserver {
       case GameEvent.ShotFired s -> new Cue(Sound.shotFor(s.slot()), s.at());
       case GameEvent.EnemyHit h -> new Cue(Sound.HIT, h.at());
       case GameEvent.EnemyKilled k -> new Cue(Sound.SQUEAK, k.at());
-      case GameEvent.PickupCollected p -> new Cue(p.health() ? Sound.HEAL : Sound.AMMO, p.at());
+      case GameEvent.PickupCollected p -> new Cue(switch (p.kind()) {
+        case HEALTH -> Sound.HEAL;
+        case AMMO -> Sound.AMMO;
+        default -> Sound.POWERUP;
+      }, p.at());
+      case GameEvent.CrateHit c -> new Cue(Sound.CRATE_HIT, c.at());
+      case GameEvent.CrateBroken c -> new Cue(Sound.CRATE_BREAK, c.at());
       case GameEvent.Exploded x -> new Cue(Sound.BOOM, x.at());
       case GameEvent.PlayerHurt h -> new Cue(Sound.HURT, null);
       case GameEvent.ReloadStarted r -> new Cue(Sound.RELOAD, null);
+      case GameEvent.LifeSaved l -> new Cue(Sound.LIFE_SAVED, null);
+      case GameEvent.WeaponEmpty w -> new Cue(Sound.EMPTY, null);
     };
   }
 

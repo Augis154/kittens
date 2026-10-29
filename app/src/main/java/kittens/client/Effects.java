@@ -8,11 +8,12 @@ import kittens.client.events.GameEvent;
 import kittens.client.events.GameObserver;
 import kittens.common.GameConfig;
 import kittens.common.math.Vec2;
+import kittens.common.net.EntityKind;
 
 /**
  * The visual half of the client's reaction to game events (an Observer): muzzle flashes, hit sparks,
- * floating damage numbers, pickup rings and the white flash on a struck enemy. Client-only: never
- * sent, never simulated.
+ * floating damage numbers, pickup rings, crate splinters and the white flash on a struck enemy or
+ * crate. Client-only: never sent, never simulated.
  */
 final class Effects implements GameObserver {
   private static final float HIT_FLASH_SECONDS = 0.14f;
@@ -23,20 +24,29 @@ final class Effects implements GameObserver {
       MUZZLE,
       HIT,
       DAMAGE,
-      PICKUP
+      PICKUP,
+      SPLINTERS
     }
 
     final Kind kind;
     final float angle;
     /** Damage dealt for {@link Kind#DAMAGE}. */
     final int amount;
-    /** An explosive muzzle flash, or a medkit rather than an ammo crate. */
+    /** An explosive muzzle flash. */
     final boolean accent;
+    /** What was picked up, for {@link Kind#PICKUP}'s colour. */
+    final EntityKind item;
     private final float maxLife;
     Vec2 pos;
     float life;
 
     private Fx(Kind kind, Vec2 pos, float angle, int amount, boolean accent, float life) {
+      this(kind, pos, angle, amount, accent, life, null);
+    }
+
+    private Fx(Kind kind, Vec2 pos, float angle, int amount, boolean accent, float life,
+        EntityKind item) {
+      this.item = item;
       this.kind = kind;
       this.pos = pos;
       this.angle = angle;
@@ -67,7 +77,12 @@ final class Effects implements GameObserver {
             h.damage(), false, 0.7f));
       }
       case GameEvent.PickupCollected p ->
-          active.add(new Fx(Fx.Kind.PICKUP, p.at(), 0f, 0, p.health(), 0.34f));
+          active.add(new Fx(Fx.Kind.PICKUP, p.at(), 0f, 0, false, 0.34f, p.kind()));
+      case GameEvent.CrateHit c -> enemyFlash.put(c.crateId(), HIT_FLASH_SECONDS);
+      case GameEvent.CrateBroken c ->
+          // amount seeds the splinter pattern, so two crates don't burst identically
+          active.add(new Fx(Fx.Kind.SPLINTERS, c.at(), 0f, Math.floorMod(c.at().hashCode(), 997),
+              false, 0.55f));
       default -> { } // the rest are for the ear, not the eye
     }
   }
@@ -85,7 +100,7 @@ final class Effects implements GameObserver {
     enemyFlash.values().removeIf(remaining -> remaining <= 0f);
   }
 
-  /** How lit an enemy is from a recent hit: 1 as it lands, easing to 0. */
+  /** How lit an enemy or crate is from a recent hit: 1 as it lands, easing to 0. */
   float hitFlash(int id) {
     return Math.clamp(enemyFlash.getOrDefault(id, 0f) / HIT_FLASH_SECONDS, 0f, 1f);
   }

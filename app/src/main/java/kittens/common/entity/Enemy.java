@@ -213,6 +213,6 @@ public abstract class Enemy extends Actor implements Prototype<Enemy> {
   }
 
   public EntityState toEntityState() {
-    return new EntityState(id, kind, pos.x, pos.y, (float) facing, (float) health, -1, 0f);
+    return new EntityState(id, kind, pos.x, pos.y, (float) facing, (float) health, -1, 0f, 0);
   }
 }

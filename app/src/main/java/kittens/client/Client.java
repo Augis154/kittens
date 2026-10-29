@@ -64,6 +64,7 @@ public final class Client extends JPanel {
   private float recoilBloom;
   private float heardHp = Float.NaN;
   private float heardReload;
+  private boolean heardNineLives;
 
   public Client(GameClient client, TileMap map, WeaponFactory family) {
     this.client = client;
@@ -142,6 +143,12 @@ public final class Client extends JPanel {
       return;
     }
     GameClient.Frame f = client.latest();
+    if (input.firing() && slot != 0 && f.empty(slot)) {
+      // Nothing left in this one: click, and fall back to the sidearm, which never runs dry.
+      events.publish(new GameEvent.WeaponEmpty());
+      input.select(0);
+      slot = 0;
+    }
     if (input.firing() && f.reload() <= 0f && f.ammo() > 0) {
       recoilBloom = Math.min(1f, recoilBloom + 0.35f);
     }
@@ -173,6 +180,12 @@ public final class Client extends JPanel {
     if (hp < heardHp) {
       events.publish(new GameEvent.PlayerHurt());
     }
+    // The spare life vanishing while the kitten still stands means it just caught a lethal hit.
+    boolean nineLives = f.buffs().nineLives();
+    if (heardNineLives && !nineLives && hp > 0f) {
+      events.publish(new GameEvent.LifeSaved());
+    }
+    heardNineLives = nineLives;
     heardHp = hp;
     if (f.reload() > 0f && heardReload <= 0f) {
       events.publish(new GameEvent.ReloadStarted());
@@ -240,7 +253,8 @@ public final class Client extends JPanel {
     int enemies = (int) f.entities().values().stream().filter(e -> e.kind().isEnemy()).count();
     return new Hud.View(me, f.players().get(me),
         mine == null ? (float) GameConfig.PLAYER_MAX_HEALTH : mine.hp(),
-        input.weapon(), family, f.ammo(), f.reload(), enemies, f.wave(), f.intermission(),
+        input.weapon(), family, input.slot(), f.magazines(), f.reserves(), f.buffs(), f.ammo(),
+        f.reload(), enemies, f.wave(), f.intermission(),
         me >= 0, localDead(), input.mouseX(), input.mouseY(), recoilBloom);
   }
 

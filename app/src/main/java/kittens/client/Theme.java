@@ -4,6 +4,7 @@ import java.awt.Color;
 import java.awt.Font;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
+import kittens.common.net.EntityKind;
 
 /** The client's palette, fonts and drawing primitives. Purely presentational; nothing here belongs in GameConfig. */
 final class Theme {
@@ -31,6 +32,29 @@ final class Theme {
   static final Color TEXT = new Color(236, 240, 248);
   static final Color TEXT_DIM = new Color(236, 240, 248, 130);
   static final Color TEXT_FAINT = new Color(236, 240, 248, 80);
+
+  // ---- pickups --------------------------------------------------------------
+
+  static final Color POWER_DAMAGE = new Color(255, 104, 80);
+  static final Color POWER_SHIELD = new Color(110, 176, 255);
+  static final Color POWER_CATNIP = new Color(156, 232, 96);
+  static final Color POWER_LIVES = new Color(200, 146, 255);
+  static final Color CRATE_WOOD = new Color(150, 104, 58);
+  static final Color CRATE_PLANK = new Color(118, 80, 44);
+  static final Color CRATE_EDGE = new Color(66, 42, 22);
+
+  /** The colour a pickup or a buff is known by, wherever it is drawn. */
+  static Color pickupTint(EntityKind kind) {
+    return switch (kind) {
+      case HEALTH -> GOOD;
+      case AMMO -> WARN;
+      case DOUBLE_DAMAGE -> POWER_DAMAGE;
+      case SHIELD -> POWER_SHIELD;
+      case CATNIP -> POWER_CATNIP;
+      case NINE_LIVES -> POWER_LIVES;
+      default -> TEXT;
+    };
+  }
 
   // ---- panels ---------------------------------------------------------------
 

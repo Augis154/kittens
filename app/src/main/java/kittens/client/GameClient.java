@@ -3,12 +3,14 @@ package kittens.client;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import kittens.client.settings.Profile;
 import kittens.client.settings.Settings;
 import kittens.common.map.TileMap;
+import kittens.common.net.BuffState;
 import kittens.common.net.EntityState;
 import kittens.common.net.InputCommand;
 import kittens.common.net.Join;
@@ -18,6 +20,7 @@ import kittens.common.net.PlayerInfo;
 import kittens.common.net.ProfileUpdate;
 import kittens.common.net.Snapshot;
 import kittens.common.net.Transport;
+import kittens.common.weapon.Weapon;
 import kittens.common.weapon.WeaponFactory;
 
 /**
@@ -26,10 +29,16 @@ import kittens.common.weapon.WeaponFactory;
  * through a {@link Transport} and cannot tell a server across the network from one in this process.
  */
 final class GameClient {
-  /** One received snapshot, with entities and the player roster indexed by id. */
+  /**
+   * One received snapshot, with entities and the player roster indexed by id. {@code magazines} and
+   * {@code reserves} are per slot of the local arsenal; a reserve of {@code Weapon.UNLIMITED} is
+   * bottomless.
+   */
   record Frame(long tick, long ackSeq, int ammo, float reload, int wave, float intermission,
-      Map<Integer, EntityState> entities, Map<Integer, PlayerInfo> players) {
-    static final Frame EMPTY = new Frame(-1, -1, 0, 0f, 0, 0f, Map.of(), Map.of());
+      Map<Integer, EntityState> entities, Map<Integer, PlayerInfo> players,
+      List<Integer> magazines, List<Integer> reserves, BuffState buffs) {
+    static final Frame EMPTY = new Frame(-1, -1, 0, 0f, 0, 0f, Map.of(), Map.of(), List.of(),
+        List.of(), BuffState.NONE);
 
     static Frame of(Snapshot s) {
       Map<Integer, EntityState> byId = new LinkedHashMap<>();
@@ -41,7 +50,23 @@ final class GameClient {
         roster.put(p.id(), p);
       }
       return new Frame(s.tick(), s.ackSeq(), s.viewerAmmo(), s.viewerReload(), s.wave(),
-          s.intermission(), Collections.unmodifiableMap(byId), Collections.unmodifiableMap(roster));
+          s.intermission(), Collections.unmodifiableMap(byId), Collections.unmodifiableMap(roster),
+          s.viewerMagazines(), s.viewerReserves(), s.viewerBuffs());
+    }
+
+    /** Rounds in {@code slot}'s magazine, or -1 before the first snapshot says. */
+    int magazine(int slot) {
+      return slot >= 0 && slot < magazines.size() ? magazines.get(slot) : -1;
+    }
+
+    /** {@code slot}'s spare rounds; {@code Weapon.UNLIMITED} for a bottomless one, or before any snapshot. */
+    int reserve(int slot) {
+      return slot >= 0 && slot < reserves.size() ? reserves.get(slot) : Weapon.UNLIMITED;
+    }
+
+    /** Out of rounds in both magazine and reserve. */
+    boolean empty(int slot) {
+      return magazine(slot) == 0 && reserve(slot) == 0;
     }
 
     /** The entity with this id, or {@code null}. */

@@ -13,7 +13,12 @@ public enum Sound {
   HEAL,
   AMMO,
   RELOAD,
-  SWITCH;
+  SWITCH,
+  CRATE_HIT,
+  CRATE_BREAK,
+  POWERUP,
+  LIFE_SAVED,
+  EMPTY;
 
   /** Indexed by role slot, which every {@code WeaponFactory} family shares, so any family maps. */
   private static final Sound[] SHOT_BY_ROLE = {PISTOL, SHOTGUN, RIFLE, LAUNCH};

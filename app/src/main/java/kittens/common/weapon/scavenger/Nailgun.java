@@ -8,6 +8,6 @@ public class Nailgun extends Weapon {
     super("scavenger/nailgun", "Nailgun",
         0.07, 5, 1, 0.08f,
         560f, 0.9,
-        40, 2.4);
+        40, 160, 2.4);
   }
 }

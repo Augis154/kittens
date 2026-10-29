@@ -1,6 +1,7 @@
 package kittens.client.events;
 
 import kittens.common.math.Vec2;
+import kittens.common.net.EntityKind;
 import kittens.common.weapon.Weapon;
 
 /**
@@ -21,8 +22,17 @@ public sealed interface GameEvent {
   /** An enemy left the snapshot; {@code at} is where it was last seen. */
   record EnemyKilled(Vec2 at) implements GameEvent {}
 
-  /** A pickup vanished with life to spare, so somebody walked into it rather than it expiring. */
-  record PickupCollected(Vec2 at, boolean health) implements GameEvent {}
+  /**
+   * A pickup vanished with life to spare, so somebody walked into it rather than it expiring.
+   * {@code kind} is what it was: a medkit, ammo, or one of the power-ups.
+   */
+  record PickupCollected(Vec2 at, EntityKind kind) implements GameEvent {}
+
+  /** A supply crate lost health to a bullet or blast. */
+  record CrateHit(int crateId, Vec2 at) implements GameEvent {}
+
+  /** A supply crate broke open; what it held appears as a pickup on the same snapshot. */
+  record CrateBroken(Vec2 at) implements GameEvent {}
 
   /** A blast, raised once on the first snapshot it appears in. */
   record Exploded(Vec2 at) implements GameEvent {}
@@ -32,4 +42,10 @@ public sealed interface GameEvent {
 
   /** The local kitten's reload began. */
   record ReloadStarted() implements GameEvent {}
+
+  /** The local kitten's spare life was spent on a hit that would have downed it. */
+  record LifeSaved() implements GameEvent {}
+
+  /** The local kitten pulled the trigger on a weapon with nothing left in it. */
+  record WeaponEmpty() implements GameEvent {}
 }

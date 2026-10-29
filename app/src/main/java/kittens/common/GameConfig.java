@@ -49,11 +49,29 @@ public final class GameConfig {
   public static final int EXPLOSION_ID_BASE = 2_000_000;
   public static final int PICKUP_ID_BASE = 3_000_000;
 
-  /** Shared because the server collects on box overlap and the client draws the crate this size. */
+  /** Shared because the server collects on box overlap and the client draws the item this size. */
   public static final int PICKUP_SIZE = 20;
-  public static final double PICKUP_LIFETIME = 22.0;
+  /** How long an item a crate dropped lies on the floor. */
+  public static final double LOOT_LIFETIME = 18.0;
+  /** Enemy drops vanish faster: they are a reward for fighting, not a stockpile. */
+  public static final double ENEMY_DROP_LIFETIME = 9.0;
   /** Deliberately short of a full heal. */
   public static final double PICKUP_HEALTH_AMOUNT = 35.0;
+  /** Share of each limited weapon's reserve capacity an ammo pickup restores. */
+  public static final double AMMO_PICKUP_SHARE = 0.5;
+
+  /** Shared because bullets hit it on the server and the client draws it this size. */
+  public static final int CRATE_SIZE = 26;
+  /** Three pistol rounds, five rifle rounds, one close shotgun blast. The client draws cracks against it. */
+  public static final double CRATE_HEALTH = 40.0;
+
+  public static final double DOUBLE_DAMAGE_SECONDS = 10.0;
+  public static final double CATNIP_SECONDS = 8.0;
+  /** Damage a shield soaks up before it pops, and how long it lasts if it never does. */
+  public static final double SHIELD_POINTS = 60.0;
+  public static final double SHIELD_SECONDS = 20.0;
+  /** Health a kitten is left with when Nine Lives saves it. */
+  public static final double NINE_LIVES_HEALTH = 50.0;
 
   /** Compile-time false: the player-hit branches it guards are intentionally dead. */
   public static final boolean FRIENDLY_FIRE = false;

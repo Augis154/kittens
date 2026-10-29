@@ -18,9 +18,9 @@ import kittens.common.weapon.WeaponFactory;
 /**
  * Cosmetic smoothing of everything the local player does <em>not</em> control: remote actors are
  * eased toward their snapshot positions and bullets are dead-reckoned between snapshots. It is also
- * where the client notices what happened — a health drop, a vanished pickup, a new projectile — by
- * diffing snapshots, and publishes each as a {@link GameEvent} for {@link Effects} and
- * {@link SoundObserver} to react to. Nothing here feeds prediction, so it can be retuned freely
+ * where the client notices what happened — a health drop, a vanished pickup, a cracked crate, a new
+ * projectile — by diffing snapshots, and publishes each as a {@link GameEvent} for {@link Effects}
+ * and {@link SoundObserver} to react to. Nothing here feeds prediction, so it can be retuned freely
  * without desync risk.
  */
 final class WorldView {
@@ -41,13 +41,14 @@ final class WorldView {
     }
   }
 
-  private record PickupSeen(Vec2 pos, float life, boolean health) {}
+  private record PickupSeen(Vec2 pos, float life, EntityKind kind) {}
 
   private final GameEvents events;
   private final Map<Integer, Vec2> smoothed = new HashMap<>();
   private final Map<Integer, Bullet> bullets = new HashMap<>();
   private final Map<Integer, PickupSeen> pickupSeen = new HashMap<>();
   private final Map<Integer, EntityState> enemyLast = new HashMap<>();
+  private final Map<Integer, EntityState> crateLast = new HashMap<>();
   private final Set<Integer> blastsHeard = new HashSet<>();
 
   WorldView(GameEvents events) {
@@ -59,6 +60,7 @@ final class WorldView {
     updateBullets(dt, entities);
     trackEnemyDamage(entities);
     trackPickups(entities);
+    trackCrates(entities);
     trackBlasts(entities);
   }
 
@@ -150,14 +152,34 @@ final class WorldView {
       }
       PickupSeen last = entry.getValue();
       if (last.life() > PICKUP_TAKEN_LIFE) {
-        events.publish(new GameEvent.PickupCollected(last.pos(), last.health()));
+        events.publish(new GameEvent.PickupCollected(last.pos(), last.kind()));
       }
       it.remove();
     }
     for (EntityState e : live.values()) {
       if (e.kind().isPickup()) {
-        pickupSeen.put(e.id(),
-            new PickupSeen(Vec2.of(e.x(), e.y()), e.hp(), e.kind() == EntityKind.HEALTH));
+        pickupSeen.put(e.id(), new PickupSeen(Vec2.of(e.x(), e.y()), e.hp(), e.kind()));
+      }
+    }
+  }
+
+  /** Crates never expire, so one leaving the snapshot was shot open; any health drop was a hit. */
+  private void trackCrates(Map<Integer, EntityState> live) {
+    Iterator<Map.Entry<Integer, EntityState>> it = crateLast.entrySet().iterator();
+    while (it.hasNext()) {
+      EntityState gone = it.next().getValue();
+      if (!live.containsKey(gone.id())) {
+        events.publish(new GameEvent.CrateBroken(Vec2.of(gone.x(), gone.y())));
+        it.remove();
+      }
+    }
+    for (EntityState e : live.values()) {
+      if (e.kind() != EntityKind.CRATE) {
+        continue;
+      }
+      EntityState previous = crateLast.put(e.id(), e);
+      if (previous != null && e.hp() < previous.hp()) {
+        events.publish(new GameEvent.CrateHit(e.id(), Vec2.of(e.x(), e.y())));
       }
     }
   }

@@ -1,54 +1,55 @@
 package kittens.server;
 
-import kittens.common.GameConfig;
+import java.util.Collection;
 import kittens.common.entity.GameObject;
+import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
-import kittens.common.net.EntityKind;
 import kittens.common.net.EntityState;
 
 /**
- * A medkit or ammo crate on the floor. Expires on its own timer and is consumed by the first player
- * who touches it <em>and would benefit</em>; it dies the moment it is taken so two players can't
- * share one. On the wire {@code hp} carries the seconds of life left.
+ * Something in the arena that hands a kitten a {@link PickupEffect} — the Abstraction of the
+ * pickups' Bridge, with the effect as its Implementor. Subclasses vary <em>how</em> the effect is
+ * delivered ({@link SupplyCrate}, {@link Loot}, {@link EnemyDrop}); the effect varies <em>what</em>
+ * it does. Any delivery carries any effect, so three deliveries and six effects are nine classes,
+ * not eighteen, and {@link GameWorld} treats every pickup through this one interface.
+ *
+ * <p>A pickup is only taken if its effect would do something: a kitten at full health walks over a
+ * medkit. It dies the moment it is taken, so two kittens can never share one.
  */
-final class Pickup extends GameObject {
-  private static final Vec2 SIZE = Vec2.of(GameConfig.PICKUP_SIZE, GameConfig.PICKUP_SIZE);
+abstract class Pickup extends GameObject {
+  protected final PickupEffect effect;
 
-  private final EntityKind kind; // HEALTH or AMMO
-  private double life = GameConfig.PICKUP_LIFETIME;
-
-  Pickup(int id, EntityKind kind, Vec2 pos) {
-    super(id, pos, SIZE);
-    this.kind = kind;
+  protected Pickup(int id, Vec2 pos, Vec2 size, PickupEffect effect) {
+    super(id, pos, size);
+    this.effect = effect;
   }
 
-  void tick(double dt) {
-    life -= dt;
-    if (life <= 0) {
-      kill();
-    }
-  }
+  /** One step of whatever the delivery does on its own: expiring, drifting toward a kitten. */
+  abstract void tick(double dt, TileMap map, Collection<ServerPlayer> players);
 
+  /** Hands the effect over if the kitten is touching it, alive, and would benefit. */
   boolean tryCollect(ServerPlayer player) {
-    if (!isAlive() || !player.isAlive() || !bounds().intersects(player.bounds())) {
+    if (!isAlive() || !player.isAlive() || !bounds().intersects(player.bounds())
+        || !effect.wanted(player)) {
       return false;
     }
-    if (kind == EntityKind.HEALTH) {
-      if (!player.wantsHealth()) {
-        return false;
-      }
-      player.heal(GameConfig.PICKUP_HEALTH_AMOUNT);
-    } else {
-      if (!player.arsenal().wantsAmmo()) {
-        return false;
-      }
-      player.arsenal().restock();
-    }
+    effect.apply(player);
     kill();
     return true;
   }
 
-  EntityState toEntityState() {
-    return new EntityState(id, kind, pos.x, pos.y, 0f, (float) Math.max(0.0, life), -1, 0f);
+  /** Whether bullets and blasts stop on it rather than passing over. */
+  boolean shootable() {
+    return false;
   }
+
+  /** Damage from a bullet or blast; only a {@link #shootable} pickup does anything with it. */
+  void takeHit(double damage) {}
+
+  /** What it leaves behind once dead, or {@code null}: a broken crate leaves its contents. */
+  Pickup release(int id) {
+    return null;
+  }
+
+  abstract EntityState toEntityState();
 }

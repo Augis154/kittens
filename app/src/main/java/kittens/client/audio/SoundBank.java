@@ -107,6 +107,42 @@ final class SoundBank {
         noise(b, rnd, 0, 0.004, 8000, 0.2f);
         yield b;
       }
+      case CRATE_HIT -> { // a dull knock on planks
+        float[] b = buffer(0.12);
+        noise(b, rnd, 0, 0.018, 1400, 0.55f);
+        tone(b, 0, 210, 150, 0.03, 0.45f, false);
+        yield b;
+      }
+      case CRATE_BREAK -> { // a crunch, then splinters rattling down
+        float[] b = buffer(0.45);
+        noise(b, rnd, 0, 0.060, 1800, 0.9f);
+        tone(b, 0, 160, 70, 0.07, 0.5f, false);
+        noise(b, rnd, 0.08, 0.030, 4500, 0.35f);
+        noise(b, rnd, 0.17, 0.025, 5000, 0.25f);
+        yield b;
+      }
+      case POWERUP -> { // a rising sweep under a quick major arpeggio
+        float[] b = buffer(0.45);
+        tone(b, 0, 300, 1200, 0.12, 0.25f, false);
+        tone(b, 0, 523, 523, 0.07, 0.22f, true);
+        tone(b, 0.07, 659, 659, 0.07, 0.22f, true);
+        tone(b, 0.14, 784, 784, 0.07, 0.22f, true);
+        tone(b, 0.21, 1047, 1047, 0.14, 0.26f, true);
+        yield b;
+      }
+      case LIFE_SAVED -> { // a deep swell that resolves upward: you should have been down
+        float[] b = buffer(0.8);
+        tone(b, 0, 110, 220, 0.30, 0.55f, true);
+        tone(b, 0.12, 440, 660, 0.20, 0.30f, true);
+        tone(b, 0.28, 880, 880, 0.25, 0.22f, true);
+        yield b;
+      }
+      case EMPTY -> { // the dry click of a trigger on nothing
+        float[] b = buffer(0.06);
+        noise(b, rnd, 0, 0.004, 6000, 0.45f);
+        tone(b, 0, 1400, 1300, 0.006, 0.18f, false);
+        yield b;
+      }
     });
   }
 

@@ -10,6 +10,9 @@ package kittens.common.weapon;
  * belong to {@code Arsenal}, not here.
  */
 public abstract class Weapon {
+  /** A reserve capacity meaning the reserve never runs out: the sidearm every family starts with. */
+  public static final int UNLIMITED = -1;
+
   private final String sprite;
   private final String displayName;
   private final double fireInterval;
@@ -19,6 +22,7 @@ public abstract class Weapon {
   private final float projectileSpeed;
   private final double projectileLifetime;
   private final int magazineSize;
+  private final int reserveCapacity;
   private final double reloadTime;
   private final float explosionRadius;
   private final double explosionDamage;
@@ -27,15 +31,15 @@ public abstract class Weapon {
   /** Non-explosive, no-recoil weapon. */
   protected Weapon(String sprite, String displayName, double fireInterval, double damage,
       int pellets, float spread, float projectileSpeed, double projectileLifetime,
-      int magazineSize, double reloadTime) {
+      int magazineSize, int reserveCapacity, double reloadTime) {
     this(sprite, displayName, fireInterval, damage, pellets, spread, projectileSpeed,
-        projectileLifetime, magazineSize, reloadTime, 0f, 0, 0f);
+        projectileLifetime, magazineSize, reserveCapacity, reloadTime, 0f, 0, 0f);
   }
 
   protected Weapon(String sprite, String displayName, double fireInterval, double damage,
       int pellets, float spread, float projectileSpeed, double projectileLifetime,
-      int magazineSize, double reloadTime, float explosionRadius, double explosionDamage,
-      float recoil) {
+      int magazineSize, int reserveCapacity, double reloadTime, float explosionRadius,
+      double explosionDamage, float recoil) {
     this.sprite = sprite;
     this.displayName = displayName;
     this.fireInterval = fireInterval;
@@ -45,6 +49,7 @@ public abstract class Weapon {
     this.projectileSpeed = projectileSpeed;
     this.projectileLifetime = projectileLifetime;
     this.magazineSize = magazineSize;
+    this.reserveCapacity = reserveCapacity;
     this.reloadTime = reloadTime;
     this.explosionRadius = explosionRadius;
     this.explosionDamage = explosionDamage;
@@ -88,9 +93,18 @@ public abstract class Weapon {
     return projectileLifetime;
   }
 
-  /** Rounds per magazine; reserve ammo is unlimited. */
+  /** Rounds per magazine. */
   public int magazineSize() {
     return magazineSize;
+  }
+
+  /** Spare rounds carried beyond the magazine when full, or {@link #UNLIMITED}. */
+  public int reserveCapacity() {
+    return reserveCapacity;
+  }
+
+  public boolean unlimited() {
+    return reserveCapacity == UNLIMITED;
   }
 
   public double reloadTime() {

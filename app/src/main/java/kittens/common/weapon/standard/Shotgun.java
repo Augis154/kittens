@@ -8,6 +8,6 @@ public class Shotgun extends Weapon {
     super("standard/shotgun", "Shotgun",
         0.72, 9, 6, 0.32f,
         380f, 0.45,
-        6, 1.7);
+        6, 24, 1.7);
   }
 }

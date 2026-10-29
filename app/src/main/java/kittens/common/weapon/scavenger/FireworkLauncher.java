@@ -8,7 +8,7 @@ public class FireworkLauncher extends Weapon {
     super("scavenger/fireworks", "Fireworks",
         0.90, 20, 1, 0.03f,
         360f, 1.6,
-        3, 1.8,
+        3, 9, 1.8,
         52f, 30, 120f);
   }
 }

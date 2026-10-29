@@ -109,6 +109,14 @@ final class InputHandler {
     return family.weaponAt(slot);
   }
 
+  /** Draws the weapon in {@code chosen}, with the switch click if it changed. */
+  void select(int chosen) {
+    if (slot != chosen) {
+      slot = chosen;
+      SoundSystem.get().play(Sound.SWITCH);
+    }
+  }
+
   int mouseX() {
     return mouseX;
   }
@@ -136,11 +144,7 @@ final class InputHandler {
 
   private void onKeyPressed(int code) {
     if (code >= KeyEvent.VK_1 && code < KeyEvent.VK_1 + family.size()) {
-      int chosen = code - KeyEvent.VK_1;
-      if (slot != chosen) {
-        slot = chosen;
-        SoundSystem.get().play(Sound.SWITCH);
-      }
+      select(code - KeyEvent.VK_1);
       return;
     }
     if (keys.is(Action.MUTE, code)) {

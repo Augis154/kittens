@@ -29,20 +29,28 @@ final class Projectile extends GameObject {
   /** Carried so the round can name its weapon on the wire; weapons themselves are id-less. */
   private final int weaponId;
   private final Vec2 velocity;
+  /** The shooter's damage multiplier when it fired (Double Damage), for the hit and the blast alike. */
+  private final double damageScale;
   private double life;
   private boolean explosionPending;
 
-  Projectile(int id, int ownerId, Vec2 pos, float angle, Weapon weapon, int weaponId) {
+  Projectile(int id, int ownerId, Vec2 pos, float angle, Weapon weapon, int weaponId,
+      double damageScale) {
     super(id, pos, SIZE);
     this.ownerId = ownerId;
     this.weapon = weapon;
     this.weaponId = weaponId;
+    this.damageScale = damageScale;
     this.velocity = Vec2.fromAngle(angle).scale(weapon.projectileSpeed());
     this.life = weapon.projectileLifetime();
   }
 
   Weapon weapon() {
     return weapon;
+  }
+
+  double damageScale() {
+    return damageScale;
   }
 
   /** True once, on the tick an explosive round died. */
@@ -52,7 +60,8 @@ final class Projectile extends GameObject {
     return r;
   }
 
-  void tick(double dt, TileMap map, Collection<ServerPlayer> players, Collection<Enemy> enemies) {
+  void tick(double dt, TileMap map, Collection<ServerPlayer> players, Collection<Enemy> enemies,
+      Collection<Pickup> pickups) {
     if (!isAlive()) {
       return;
     }
@@ -83,14 +92,27 @@ final class Projectile extends GameObject {
         }
       }
     }
+    Pickup hitPickup = null;
+    for (Pickup pk : pickups) {
+      float t = pk.isAlive() && pk.shootable() ? sweep(from, to, pk.bounds()) : NO_HIT;
+      if (t < nearest) {
+        nearest = t;
+        hitPickup = pk;
+        hitEnemy = null;
+        hitPlayer = null;
+      }
+    }
 
     if (nearest < NO_HIT) {
       pos = from.add(to.sub(from).scale(nearest)); // stop at the impact point
+      double damage = weapon.damage() * damageScale;
       if (hitEnemy != null) {
-        hitEnemy.damage(weapon.damage());
+        hitEnemy.damage(damage);
         hitEnemy.applyKnockback(velocity.normalized().scale(GameConfig.PROJECTILE_KNOCKBACK));
       } else if (hitPlayer != null) {
-        hitPlayer.damage(weapon.damage());
+        hitPlayer.damage(damage);
+      } else if (hitPickup != null) {
+        hitPickup.takeHit(damage);
       }
       detonate();
     } else if (life <= 0) {
@@ -171,6 +193,6 @@ final class Projectile extends GameObject {
 
   EntityState toEntityState() {
     float angle = (float) Math.atan2(velocity.y, velocity.x);
-    return new EntityState(id, EntityKind.BULLET, pos.x, pos.y, angle, 0f, weaponId, 0f);
+    return new EntityState(id, EntityKind.BULLET, pos.x, pos.y, angle, 0f, weaponId, 0f, 0);
   }
 }

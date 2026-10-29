@@ -9,15 +9,25 @@ public enum EntityKind {
   MOUSE,
   BULLET,
   BOOM,
+  /** A shootable supply crate; its contents are deliberately not on the wire. */
+  CRATE,
   HEALTH,
-  AMMO;
+  AMMO,
+  DOUBLE_DAMAGE,
+  SHIELD,
+  CATNIP,
+  NINE_LIVES;
 
   public boolean isEnemy() {
     return this == RAT || this == MOUSE;
   }
 
+  /** An item lying on the floor, waiting to be walked over. A {@link #CRATE} is not one until it breaks. */
   public boolean isPickup() {
-    return this == HEALTH || this == AMMO;
+    return switch (this) {
+      case HEALTH, AMMO, DOUBLE_DAMAGE, SHIELD, CATNIP, NINE_LIVES -> true;
+      default -> false;
+    };
   }
 
   /** Actors travel between snapshots, so the client eases their position. */

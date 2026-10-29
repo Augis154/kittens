@@ -8,6 +8,6 @@ public class Rifle extends Weapon {
     super("standard/ak", "Rifle",
         0.10, 8, 1, 0.05f,
         520f, 1.1,
-        30, 2.0);
+        30, 120, 2.0);
   }
 }

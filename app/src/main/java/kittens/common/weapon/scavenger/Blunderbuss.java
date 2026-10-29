@@ -8,6 +8,6 @@ public class Blunderbuss extends Weapon {
     super("scavenger/blunderbuss", "Blunderbuss",
         1.00, 7, 9, 0.45f,
         340f, 0.40,
-        2, 1.6);
+        2, 12, 1.6);
   }
 }

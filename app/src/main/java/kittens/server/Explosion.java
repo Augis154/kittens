@@ -30,6 +30,6 @@ final class Explosion extends GameObject {
   EntityState toEntityState() {
     float progress = (float) Math.clamp(1 - life / DURATION, 0.0, 1.0);
     float current = radius * (0.35f + 0.65f * progress);
-    return new EntityState(id, EntityKind.BOOM, pos.x, pos.y, current, radius, -1, 0f);
+    return new EntityState(id, EntityKind.BOOM, pos.x, pos.y, current, radius, -1, 0f, 0);
   }
 }

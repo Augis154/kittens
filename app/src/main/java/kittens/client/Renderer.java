@@ -7,12 +7,15 @@ import java.awt.Composite;
 import java.awt.Graphics2D;
 import java.awt.Stroke;
 import java.awt.geom.AffineTransform;
+import java.awt.geom.Path2D;
 import java.awt.image.BufferedImage;
 import java.util.Map;
+import java.util.Random;
 import kittens.common.GameConfig;
 import kittens.common.map.Tile;
 import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
+import kittens.common.net.Buff;
 import kittens.common.net.EntityKind;
 import kittens.common.net.EntityState;
 import kittens.common.net.PlayerInfo;
@@ -127,15 +130,17 @@ final class Renderer {
 
   // ---- entities -------------------------------------------------------------
 
-  /** Pickups, bullets, enemies, remote kittens, the local kitten, explosions — in that order. */
+  /** Crates and pickups, bullets, enemies, remote kittens, the local kitten, explosions — in that order. */
   private void drawEntities(Graphics2D g, Scene scene) {
     Map<Integer, EntityState> entities = scene.entities();
     WorldView view = scene.view();
     int me = scene.myPlayerId();
 
     for (EntityState e : entities.values()) {
-      if (e.kind().isPickup()) {
-        drawPickup(g, e, e.kind() == EntityKind.HEALTH);
+      if (e.kind() == EntityKind.CRATE) {
+        drawCrate(g, e, scene.effects().hitFlash(e.id()));
+      } else if (e.kind().isPickup()) {
+        drawPickup(g, e);
       }
     }
     for (WorldView.Bullet b : view.bullets()) {
@@ -169,12 +174,72 @@ final class Renderer {
     }
   }
 
-  /** A hovering crate: green with a cross for a medkit, amber with a clip of rounds for ammo. */
-  private void drawPickup(Graphics2D g, EntityState e, boolean health) {
+  /**
+   * A wooden supply crate. Nothing on it says what is inside — that is the point — but it cracks as
+   * it is shot and jolts on each hit, so a kitten can tell how close it is to breaking.
+   */
+  private void drawCrate(Graphics2D g, EntityState e, float flash) {
+    int size = GameConfig.CRATE_SIZE;
+    float damage = 1f - Math.clamp(e.hp() / (float) GameConfig.CRATE_HEALTH, 0f, 1f);
+    // A hit jolts it sideways for a moment.
+    float jolt = flash > 0f ? (float) Math.sin(flash * 40f) * 2.5f * flash : 0f;
+    float cx = e.x() + jolt;
+    drawShadow(g, cx, e.y(), size);
+    int x = Math.round(cx - size / 2f);
+    int y = Math.round(e.y() - size / 2f);
+
+    g.setColor(Theme.CRATE_WOOD);
+    g.fillRect(x, y, size, size);
+    g.setColor(Theme.CRATE_PLANK); // plank seams
+    for (int i = 1; i < 3; i++) {
+      g.fillRect(x, y + i * size / 3 - 1, size, 2);
+    }
+    Stroke baseStroke = g.getStroke();
+    g.setStroke(new BasicStroke(3f));
+    g.setColor(Theme.CRATE_PLANK); // the diagonal brace
+    g.drawLine(x + 3, y + size - 3, x + size - 3, y + 3);
+    g.setStroke(new BasicStroke(2f));
+    g.setColor(Theme.CRATE_EDGE);
+    g.drawRect(x + 1, y + 1, size - 2, size - 2);
+    g.setColor(new Color(160, 160, 170)); // nail heads in the corners
+    for (int[] c : new int[][] {{4, 4}, {size - 6, 4}, {4, size - 6}, {size - 6, size - 6}}) {
+      g.fillRect(x + c[0], y + c[1], 2, 2);
+    }
+
+    // Cracks: more of them, longer, as it takes damage. Seeded by id so they don't crawl each frame.
+    if (damage > 0.05f) {
+      Random r = new Random(e.id());
+      g.setStroke(new BasicStroke(1.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+      g.setColor(new Color(36, 22, 10, 220));
+      int cracks = 1 + Math.round(damage * 4);
+      for (int i = 0; i < cracks; i++) {
+        float px = x + 4 + r.nextFloat() * (size - 8);
+        float py = y + 4 + r.nextFloat() * (size - 8);
+        double a = r.nextDouble() * Math.PI * 2;
+        for (int seg = 0; seg < 3; seg++) {
+          float len = (3f + r.nextFloat() * 4f) * (0.5f + damage);
+          a += r.nextDouble() - 0.5;
+          float nx = Math.clamp(px + (float) Math.cos(a) * len, x + 2, x + size - 2);
+          float ny = Math.clamp(py + (float) Math.sin(a) * len, y + 2, y + size - 2);
+          g.drawLine(Math.round(px), Math.round(py), Math.round(nx), Math.round(ny));
+          px = nx;
+          py = ny;
+        }
+      }
+    }
+    if (flash > 0f) {
+      g.setColor(Theme.alpha(Color.WHITE, 0.35f * flash));
+      g.fillRect(x, y, size, size);
+    }
+    g.setStroke(baseStroke);
+  }
+
+  /** A hovering item, tinted and marked by what it does; it blinks as it nears expiry. */
+  private void drawPickup(Graphics2D g, EntityState e) {
     int size = GameConfig.PICKUP_SIZE;
-    Color tint = health ? Theme.GOOD : Theme.WARN;
+    Color tint = Theme.pickupTint(e.kind());
     double clock = System.nanoTime() / 1e9;
-    float bob = (float) Math.sin(clock * 2.6 + e.id()) * 2.5f; // offset by id so crates don't pulse in unison
+    float bob = (float) Math.sin(clock * 2.6 + e.id()) * 2.5f; // offset by id so items don't pulse in unison
 
     drawShadow(g, e.x(), e.y(), size);
     Composite baseComposite = g.getComposite();
@@ -191,22 +256,64 @@ final class Renderer {
     g.fillRoundRect(x, y, size, size, 6, 6);
     g.setColor(tint);
     g.drawRoundRect(x, y, size - 1, size - 1, 6, 6);
-
     // Icons are drawn, not sprited: a bitmap scaled to 20px turns to mush.
-    if (health) {
-      int arm = 4;
-      int span = size - 8;
-      g.fillRoundRect(Math.round(x + (size - arm) / 2f), y + 4, arm, span, 2, 2);
-      g.fillRoundRect(x + 4, Math.round(y + (size - arm) / 2f), span, arm, 2, 2);
-    } else {
-      int roundW = 3;
-      int gap = 3;
-      int startX = Math.round(x + size / 2f - (3 * roundW + 2 * gap) / 2f);
-      for (int i = 0; i < 3; i++) {
-        g.fillRoundRect(startX + i * (roundW + gap), y + 5, roundW, size - 10, 3, 3);
-      }
-    }
+    pickupIcon(g, e.kind(), x, y, size);
     g.setComposite(baseComposite);
+  }
+
+  /** The mark inside a pickup's box; the colour is already set to its tint. */
+  private static void pickupIcon(Graphics2D g, EntityKind kind, int x, int y, int size) {
+    Stroke baseStroke = g.getStroke();
+    float cx = x + size / 2f;
+    float cy = y + size / 2f;
+    switch (kind) {
+      case HEALTH -> {
+        int arm = 4;
+        int span = size - 8;
+        g.fillRoundRect(Math.round(x + (size - arm) / 2f), y + 4, arm, span, 2, 2);
+        g.fillRoundRect(x + 4, Math.round(y + (size - arm) / 2f), span, arm, 2, 2);
+      }
+      case AMMO -> {
+        int roundW = 3;
+        int gap = 3;
+        int startX = Math.round(x + size / 2f - (3 * roundW + 2 * gap) / 2f);
+        for (int i = 0; i < 3; i++) {
+          g.fillRoundRect(startX + i * (roundW + gap), y + 5, roundW, size - 10, 3, 3);
+        }
+      }
+      case DOUBLE_DAMAGE -> {
+        g.setFont(Theme.FONT_SMALL);
+        String txt = "x2";
+        int w = Theme.textWidth(g, Theme.FONT_SMALL, txt);
+        g.drawString(txt, Math.round(cx - w / 2f), Math.round(cy + 4.5f));
+      }
+      case SHIELD -> {
+        Path2D.Float shield = new Path2D.Float();
+        shield.moveTo(cx, y + 4);
+        shield.lineTo(x + size - 5, y + 6);
+        shield.quadTo(x + size - 5, y + size - 6, cx, y + size - 3);
+        shield.quadTo(x + 5, y + size - 6, x + 5, y + 6);
+        shield.closePath();
+        g.fill(shield);
+      }
+      case CATNIP -> { // a leaf on its stem
+        AffineTransform saved = g.getTransform();
+        g.translate(cx, cy);
+        g.rotate(-Math.PI / 4);
+        g.fillOval(-3, -7, 7, 14);
+        g.setTransform(saved);
+        g.setStroke(new BasicStroke(1.5f));
+        g.drawLine(Math.round(cx - 1), Math.round(cy + 1), x + 4, y + size - 4);
+      }
+      case NINE_LIVES -> { // a paw print
+        g.fillOval(Math.round(cx - 4.5f), Math.round(cy - 1), 9, 7);
+        g.fillOval(Math.round(cx - 7), Math.round(cy - 6), 4, 4);
+        g.fillOval(Math.round(cx - 2), Math.round(cy - 8), 4, 4);
+        g.fillOval(Math.round(cx + 3), Math.round(cy - 6), 4, 4);
+      }
+      default -> { }
+    }
+    g.setStroke(baseStroke);
   }
 
   /** Solid until nearly expired, then a quickening blink that never reaches 0. */
@@ -300,6 +407,14 @@ final class Renderer {
     }
 
     drawShadow(g, at.x, at.y, t);
+    int buffs = state.buffs();
+    double clock = System.nanoTime() / 1e9;
+    if (Buff.DOUBLE_DAMAGE.in(buffs)) { // a hot glow at the kitten's feet
+      float pulse = (float) (0.75 + 0.25 * Math.sin(clock * 8 + id));
+      g.setColor(Theme.alpha(Theme.POWER_DAMAGE, 0.32f * pulse));
+      g.fillOval(Math.round(at.x - t * 0.62f), Math.round(at.y - t * 0.1f),
+          Math.round(t * 1.24f), Math.round(t * 0.62f));
+    }
 
     // Immunity pulses the sprite so teammates can see who is protected, quickening as it runs out.
     float grace = state.invulnerableFor();
@@ -323,6 +438,26 @@ final class Renderer {
     g.setTransform(saved);
     g.setComposite(baseComposite);
 
+    if (Buff.CATNIP.in(buffs)) { // three green motes circling: the frenzy
+      for (int i = 0; i < 3; i++) {
+        double a = clock * 5 + i * Math.PI * 2 / 3;
+        int sx = Math.round(at.x + (float) Math.cos(a) * t * 0.62f);
+        int sy = Math.round(at.y + (float) Math.sin(a) * t * 0.40f);
+        g.setColor(Theme.alpha(Theme.POWER_CATNIP, 0.9f));
+        g.fillOval(sx - 2, sy - 2, 5, 5);
+      }
+    }
+    if (Buff.SHIELD.in(buffs)) { // a bubble around the kitten
+      int r = Math.round(t * 0.72f);
+      float shimmer = (float) (0.5 + 0.5 * Math.sin(clock * 4 + id));
+      g.setColor(Theme.alpha(Theme.POWER_SHIELD, 0.14f + 0.06f * shimmer));
+      g.fillOval(Math.round(at.x) - r, Math.round(at.y) - r, r * 2, r * 2);
+      g.setStroke(new BasicStroke(1.6f));
+      g.setColor(Theme.alpha(Theme.POWER_SHIELD, 0.65f + 0.25f * shimmer));
+      g.drawOval(Math.round(at.x) - r, Math.round(at.y) - r, r * 2, r * 2);
+      g.setStroke(baseStroke);
+    }
+
     // Remote kittens get a health bar; the local one uses the heart HUD.
     float top = y - 8;
     if (!self) {
@@ -333,6 +468,18 @@ final class Renderer {
       }
     }
     nameplate(g, name, at.x, top - 2, self ? Theme.ACCENT : Theme.TEXT);
+    if (Buff.NINE_LIVES.in(buffs)) { // a spare life: a paw badge just right of the name
+      g.setFont(Theme.FONT_WORLD);
+      int badgeX = Math.round(at.x + Theme.textWidth(g, Theme.FONT_WORLD, name) / 2f + 9);
+      int badgeY = Math.round(top - 6);
+      g.setColor(new Color(0, 0, 0, 130));
+      g.fillOval(badgeX - 6, badgeY - 6, 12, 12);
+      g.setColor(Theme.POWER_LIVES);
+      g.fillOval(badgeX - 3, badgeY - 1, 6, 5);
+      g.fillOval(badgeX - 4, badgeY - 4, 2, 2);
+      g.fillOval(badgeX - 1, badgeY - 5, 2, 2);
+      g.fillOval(badgeX + 2, badgeY - 4, 2, 2);
+    }
   }
 
   private void drawBoom(Graphics2D g, EntityState e) {
@@ -431,10 +578,26 @@ final class Renderer {
           g.drawOval(cx - r, cy - r, r * 2, r * 2);
           g.setStroke(baseStroke);
         }
+        case SPLINTERS -> { // shards flung outward, tumbling and fading
+          Random r = new Random(fx.amount);
+          float spread = (1f - t) * 26f;
+          for (int i = 0; i < 9; i++) {
+            double a = r.nextDouble() * Math.PI * 2;
+            float dist = spread * (0.5f + r.nextFloat());
+            float sx = fx.pos.x + (float) Math.cos(a) * dist;
+            float sy = fx.pos.y + (float) Math.sin(a) * dist + (1f - t) * (1f - t) * 10f; // they fall
+            AffineTransform saved = g.getTransform();
+            g.translate(sx, sy);
+            g.rotate(a + (1f - t) * 6f * (r.nextBoolean() ? 1 : -1));
+            g.setColor(Theme.alpha(i % 3 == 0 ? Theme.CRATE_EDGE : Theme.CRATE_WOOD, Math.min(1f, t * 1.6f)));
+            g.fillRect(-4, -1, 8, 3);
+            g.setTransform(saved);
+          }
+        }
         case PICKUP -> {
           int r = Math.round(6 + (1f - t) * 18f);
           g.setStroke(new BasicStroke(2.5f));
-          g.setColor(Theme.alpha(fx.accent ? Theme.GOOD : Theme.WARN, 0.9f * t));
+          g.setColor(Theme.alpha(Theme.pickupTint(fx.item), 0.9f * t));
           g.drawOval(cx - r, cy - r, r * 2, r * 2);
           g.setStroke(baseStroke);
         }

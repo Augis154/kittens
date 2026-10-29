@@ -10,19 +10,23 @@ import java.awt.Graphics2D;
 import java.awt.Shape;
 import java.awt.Stroke;
 import java.awt.image.BufferedImage;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import kittens.client.settings.Action;
 import kittens.client.settings.AudioPrefs;
 import kittens.client.settings.KeyBindings;
 import kittens.client.settings.Settings;
 import kittens.common.GameConfig;
+import kittens.common.net.BuffState;
+import kittens.common.net.EntityKind;
 import kittens.common.net.PlayerInfo;
 import kittens.common.weapon.Weapon;
 import kittens.common.weapon.WeaponFactory;
 
 /**
- * The screen-space overlay: hearts, status, weapon bar, ammo, crosshair and the connecting/downed
- * curtains. Drawn at native window resolution so text stays crisp; everything it needs arrives in
+ * The screen-space overlay: hearts, buffs, status, weapon bar, ammo, crosshair and the
+ * connecting/downed curtains. Drawn at native window resolution so text stays crisp; everything it needs arrives in
  * one {@link View}.
  */
 final class Hud {
@@ -42,6 +46,10 @@ final class Hud {
       float hp,
       Weapon weapon,
       WeaponFactory family,
+      int slot,
+      List<Integer> magazines,
+      List<Integer> reserves,
+      BuffState buffs,
       int ammo,
       float reload,
       int enemyCount,
@@ -51,7 +59,22 @@ final class Hud {
       boolean downed,
       int cursorX,
       int cursorY,
-      float recoilBloom) {}
+      float recoilBloom) {
+
+    /** Rounds in {@code slot}'s magazine; the drawn weapon's falls back to the plain ammo count. */
+    int magazine(int i) {
+      return i < magazines.size() ? magazines.get(i) : i == slot ? ammo : 0;
+    }
+
+    /** {@code Weapon.UNLIMITED}, or spare rounds; unknown before the first snapshot, so unlimited. */
+    int reserve(int i) {
+      return i < reserves.size() ? reserves.get(i) : Weapon.UNLIMITED;
+    }
+
+    boolean empty(int i) {
+      return magazine(i) == 0 && reserve(i) == 0;
+    }
+  }
 
   private final AssetManager assets;
 
@@ -78,6 +101,7 @@ final class Hud {
     }
 
     drawHearts(g, v, frac);
+    drawBuffs(g, v);
     drawWave(g, width, v);
     drawStatus(g, width, v);
     drawWeaponBar(g, width, height, v);
@@ -116,6 +140,43 @@ final class Hud {
     g.setFont(Theme.FONT_SMALL);
     String hp = Math.round(Math.ceil(v.hp())) + " / " + (int) GameConfig.PLAYER_MAX_HEALTH;
     Theme.shadowedText(g, hp, x0, y0 + HEART_SIZE + 15, Theme.healthColor(frac));
+  }
+
+  /** A chip per running buff under the hearts, each with a bar draining as it runs out. */
+  private void drawBuffs(Graphics2D g, View v) {
+    BuffState b = v.buffs();
+    record Chip(EntityKind kind, String label, float fill) {}
+    List<Chip> chips = new ArrayList<>();
+    if (b.shield() > 0f) {
+      chips.add(new Chip(EntityKind.SHIELD, "SHIELD " + Math.round(Math.ceil(b.shield())),
+          b.shield() / (float) GameConfig.SHIELD_POINTS));
+    }
+    if (b.doubleDamage() > 0f) {
+      chips.add(new Chip(EntityKind.DOUBLE_DAMAGE, "DOUBLE DAMAGE " + (int) Math.ceil(b.doubleDamage()) + "s",
+          b.doubleDamage() / (float) GameConfig.DOUBLE_DAMAGE_SECONDS));
+    }
+    if (b.catnip() > 0f) {
+      chips.add(new Chip(EntityKind.CATNIP, "CATNIP FRENZY " + (int) Math.ceil(b.catnip()) + "s",
+          b.catnip() / (float) GameConfig.CATNIP_SECONDS));
+    }
+    if (b.nineLives()) {
+      chips.add(new Chip(EntityKind.NINE_LIVES, "NINE LIVES", 1f));
+    }
+    int y = MARGIN + HEART_SIZE + 30 + 8;
+    g.setFont(Theme.FONT_SMALL);
+    for (Chip c : chips) {
+      Color tint = Theme.pickupTint(c.kind());
+      int w = Theme.textWidth(g, Theme.FONT_SMALL, c.label()) + 40;
+      Theme.panel(g, MARGIN, y, w, 26);
+      g.setColor(tint);
+      g.fillOval(MARGIN + 10, y + 8, 10, 10);
+      Theme.shadowedText(g, c.label(), MARGIN + 28, y + 15, tint);
+      g.setColor(new Color(255, 255, 255, 30));
+      g.fillRoundRect(MARGIN + 28, y + 19, w - 40, 3, 3, 3);
+      g.setColor(Theme.alpha(tint, 0.85f));
+      g.fillRoundRect(MARGIN + 28, y + 19, Math.max(1, Math.round((w - 40) * Math.clamp(c.fill(), 0f, 1f))), 3, 3, 3);
+      y += 32;
+    }
   }
 
   private void drawWave(Graphics2D g, int width, View v) {
@@ -172,10 +233,11 @@ final class Hud {
         g.setStroke(saved);
       }
 
+      boolean empty = v.empty(i);
       int icon = 34;
       Composite baseComposite = g.getComposite();
-      if (!active) {
-        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.55f));
+      if (!active || empty) {
+        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, empty ? 0.25f : 0.55f));
       }
       g.drawImage(assets.weapon(w.sprite()), x + (SLOT_W - icon) / 2, top + 6, icon, icon, null);
       g.setComposite(baseComposite);
@@ -183,6 +245,11 @@ final class Hud {
       g.setFont(Theme.FONT_SMALL);
       Theme.shadowedText(g, String.valueOf(i + 1), x + 7, top + 16,
           active ? Theme.ACCENT : Theme.TEXT_FAINT);
+      // Rounds left in all, top right: what this weapon can still do before it needs a crate.
+      String left = v.reserve(i) == Weapon.UNLIMITED ? "\u221e"
+          : empty ? "EMPTY" : String.valueOf(v.magazine(i) + v.reserve(i));
+      Theme.shadowedText(g, left, x + SLOT_W - 7 - Theme.textWidth(g, Theme.FONT_SMALL, left),
+          top + 16, empty ? Theme.DANGER : Theme.TEXT_FAINT);
       String name = w.displayName();
       int nameX = x + (SLOT_W - Theme.textWidth(g, Theme.FONT_SMALL, name)) / 2;
       Theme.shadowedText(g, name, nameX, top + h - 9, active ? Theme.TEXT : Theme.TEXT_DIM);
@@ -198,7 +265,10 @@ final class Hud {
     Theme.panel(g, x, y, panelW, panelH);
 
     boolean reloading = v.reload() > 0f;
-    int ammo = Math.clamp(v.ammo(), 0, mag); // the server's weapon can lag a key press by a tick
+    // Read by the client's own slot, so a key press shows the new weapon's rounds at once.
+    int ammo = Math.clamp(v.magazine(v.slot()), 0, mag);
+    int reserve = v.reserve(v.slot());
+    boolean empty = v.empty(v.slot());
     float frac = reloading ? Math.clamp(v.reload(), 0f, 1f) : ammo / (float) mag;
     Color tint = reloading ? Theme.WARN
         : ammo == 0 ? Theme.DANGER
@@ -211,9 +281,13 @@ final class Hud {
     g.setFont(Theme.FONT_SMALL);
     int bigW = Theme.textWidth(g, Theme.FONT_DISPLAY, big);
     Theme.shadowedText(g, "/ " + mag, x + 20 + bigW, y + 34, Theme.TEXT_DIM);
-    String label = reloading ? "RELOADING" : "ROUNDS";
+    String label = reloading ? "RELOADING" : empty ? "EMPTY" : "ROUNDS";
     int labelX = x + panelW - 12 - Theme.textWidth(g, Theme.FONT_SMALL, label);
-    Theme.shadowedText(g, label, labelX, y + 22, reloading ? Theme.WARN : Theme.TEXT_FAINT);
+    Theme.shadowedText(g, label, labelX, y + 22,
+        reloading ? Theme.WARN : empty ? Theme.DANGER : Theme.TEXT_FAINT);
+    String spare = reserve == Weapon.UNLIMITED ? "\u221e spare" : reserve + " spare";
+    Theme.shadowedText(g, spare, x + panelW - 12 - Theme.textWidth(g, Theme.FONT_SMALL, spare),
+        y + 38, reserve == 0 ? Theme.DANGER : Theme.TEXT_DIM);
 
     // Magazine gauge: one segment per round while that stays readable, else a plain bar.
     int barX = x + 14;

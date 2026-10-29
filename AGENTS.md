@@ -20,8 +20,9 @@ intent. Two constraints from it shape everything here:
    Singleton `Server`, `SoundSystem` and `Settings`, Command in `InputCommand`, Facade in `GameWorld`
    and `AudioControls`, Observer in `GameEvents`, Game Loop in `ServerLoop`, Flyweight cache in
    `AssetManager`, Factory and Prototype in `EnemyFactory` (managing and cloning `Enemy` archetypes),
-   Abstract Factory in `WeaponFactory`, Builder in `TileMap`, and Adapter in the `common/net`
-   transports (`Transport`/`TransportListener`, each adapted over TCP and an in-process loopback).
+   Abstract Factory in `WeaponFactory`, Builder in `TileMap`, Adapter in the `common/net`
+   transports (`Transport`/`TransportListener`, each adapted over TCP and an in-process loopback),
+   and Bridge in the pickups (`Pickup` deliveries × `PickupEffect` effects, see *Pickups*).
    Leave pattern labels accurate when
    touching those classes. Before/after class diagrams for the Abstract Factory, Observer and Facade
    additions are in `docs/`.
@@ -130,8 +131,10 @@ else in `common` is the shared simulation both sides run.
   `GameConfig`.
 - **`server/`** — `Server` (accept loop over any `TransportListener` + per-client reader threads),
   `ServerLoop`, `GameWorld`,
-  `ServerPlayer` (carries a `common.weapon.Arsenal`), `Projectile`, `Explosion`, `Pickup`,
-  `SpawnDirector`, `PickupDirector`.
+  `ServerPlayer` (carries a `common.weapon.Arsenal` and the pickup buffs), `Projectile`, `Explosion`,
+  `SpawnDirector`, `PickupDirector`, and the pickups' Bridge: `Pickup` with `SupplyCrate`, `Loot` and
+  `EnemyDrop`, and `PickupEffect` with one class per effect (`HealEffect`, `AmmoEffect`,
+  `DoubleDamageEffect`, `ShieldEffect`, `CatnipEffect`, `NineLivesEffect`).
 - **`client/`** — `GameClient` (networking; publishes each snapshot as an immutable `Frame`),
   `Client` (window, timers, scene assembly; its `main` shows `ArsenalMenu` first and only connects
   once a family is picked — to the host, or offline to a `Server` started in the client's own
@@ -187,7 +190,8 @@ footprint so the camera still has somewhere to scroll.
 `ServerLoop` is a fixed-timestep accumulator on a daemon thread at `GameConfig.TICK_HZ` (30 Hz).
 Each tick `GameWorld.tick(dt)` runs a fixed pipeline — players → weapon fire → pickups → spawn
 director → enemies → projectiles → explosion detonation → cull — then `Server.tick` sends **one
-snapshot per client**, because `ackSeq`, `viewerAmmo`, and `viewerReload` are all recipient-specific.
+snapshot per client**, because `ackSeq` and the `viewer*` fields — the drawn weapon's ammo and reload,
+every slot's magazine and reserve, and the recipient's own `BuffState` — are all recipient-specific.
 `wave` and `intermission` (seconds to the next wave, 0 while one runs) ride on every snapshot too but
 are the same for everyone; they come from `SpawnDirector.wave()`/`intermission()` and reach the HUD
 through `GameClient.Frame`. The countdown only advances while someone is alive, so it freezes while
@@ -204,15 +208,17 @@ and enemies are eased exponentially toward their snapshot positions, and bullets
 from their angle and weapon speed. The split matters — prediction is reconciled against authority
 and lives in `Predictor`, while `WorldView` is cosmetic and can be retuned without desync risk.
 `WorldView` is also where the client notices that something happened — a new bullet, a health drop, a
-vanished pickup — and it publishes each as a `GameEvent` instead of reacting itself.
+vanished pickup, a crate losing health or vanishing (crates never expire, so a vanished one was shot
+open) — and it publishes each as a `GameEvent` instead of reacting itself.
 
 ### Events
 
 `GameEvents` is the subject (Observer pattern) and `GameObserver` the interface. `Client` subscribes
-two observers: `Effects` (muzzle flashes, hit sparks, floating damage numbers, pickup rings, the
-white flash on a struck enemy) and `SoundObserver` (the event-to-sound table, `cueFor`). `WorldView`
-publishes what it sees in snapshots; `Client` publishes the two events only it can see,
-`PlayerHurt` and `ReloadStarted`, read off the local kitten's own snapshot.
+two observers: `Effects` (muzzle flashes, hit sparks, floating damage numbers, pickup rings, crate
+splinters, the white flash on a struck enemy or crate) and `SoundObserver` (the event-to-sound table,
+`cueFor`). `WorldView` publishes what it sees in snapshots; `Client` publishes the events only it can
+see, read off the local kitten's own snapshot or input: `PlayerHurt`, `ReloadStarted`, `LifeSaved`
+(the Nine Lives flag dropping while the kitten still stands) and `WeaponEmpty`.
 
 - **A reaction to something that happened is a new observer, not a line in `WorldView`.** That class
   must stay free of `SoundSystem` and of effect state; that coupling is what the bus replaced.
@@ -279,8 +285,9 @@ onto `JoinAccepted` rather than becoming a fifth message type.
 
 `EntityState` is one flat render-ready row. Two conventions to know:
 
-- `kind` is the `EntityKind` enum (`CAT`, `RAT`, `MOUSE`, `BULLET`, `BOOM`, `HEALTH`, `AMMO`),
-  serialized by name. Its `isEnemy()`/`isPickup()`/`isActor()` are the only way code should ask
+- `kind` is the `EntityKind` enum (`CAT`, `RAT`, `MOUSE`, `BULLET`, `BOOM`, `CRATE`, and the six
+  pickup kinds `HEALTH`, `AMMO`, `DOUBLE_DAMAGE`, `SHIELD`, `CATNIP`, `NINE_LIVES`), serialized by
+  name. `isPickup()` is true for those six only: a `CRATE` is not a pickup until it breaks. Its `isEnemy()`/`isPickup()`/`isActor()` are the only way code should ask
   "what sort of thing is this"; `sprite()` is the lower-case resource name.
 - **`weaponId` is a wire id, not a slot.** It is unique across weapon families
   (`WeaponFactory.decode`), because a client must draw weapons and bullets belonging to players who
@@ -288,12 +295,16 @@ onto `JoinAccepted` rather than becoming a fifth message type.
   *sender's own* arsenal, resolved server-side, so a client can never select a weapon it does not
   carry. Don't pass one where the other is expected — both are plain ints.
 - **Two kinds overload the fields** rather than widening the record for everyone: for `BOOM`,
-  `angle` carries the current expanding radius and `hp` the final radius; for `HEALTH`/`AMMO`,
-  `hp` carries the pickup's remaining lifetime in seconds. Both are read only for presentation. A
-  third overload is the point at which this wants a better shape.
+  `angle` carries the current expanding radius and `hp` the final radius; for the pickup kinds,
+  `hp` carries the remaining lifetime in seconds. Both are read only for presentation. A third
+  overload is the point at which this wants a better shape — which is why a kitten's buffs got
+  their own `buffs` field (a `Buff` bit mask, 0 on every other kind) rather than reusing one. A
+  `CRATE`'s `hp` is not an overload: it is the crate's real health.
+- **A crate's contents are deliberately not on the wire.** It travels as plain `CRATE`; what it
+  holds only appears, as a pickup kind, once it has been shot open.
 
-Adding a field to `EntityState` touches all five construction sites (`ServerPlayer`, `Enemy`,
-`Projectile`, `Explosion`, `Pickup`). Records serialize by field, and both sides share the class, so
+Adding a field to `EntityState` touches all seven construction sites (`ServerPlayer`, `Enemy`,
+`Projectile`, `Explosion`, `SupplyCrate`, `Loot`, `EnemyDrop`). Records serialize by field, and both sides share the class, so
 the wire stays consistent automatically.
 
 ### Threading
@@ -371,18 +382,41 @@ cannot show it.
 
 ### Pickups
 
-`PickupDirector` drops one health or ammo `Pickup` every few seconds, up to a cap, on a random
-plain-floor tile clear of the players and of the crates already out. Each expires on its own timer,
-so the steady state is a handful of crates that keep relocating rather than a stockpile.
+Pickups are a **Bridge**. `Pickup` (the abstraction) is *how* an effect reaches a kitten;
+`PickupEffect` (the implementor) is *what* it does. Any delivery carries any effect, and `GameWorld`
+handles every pickup through `Pickup` alone (`tick`, `tryCollect`, `shootable`/`takeHit`,
+`release`), so a new effect is one class and works in every delivery, and vice versa.
 
-Two rules are worth knowing before touching them:
+- **Deliveries:** `SupplyCrate` — `PickupDirector` places one every few seconds up to a cap, on
+  plain floor clear of the players and other pickups, contents drawn from a weighted table. It is
+  never collected by touch: it has to be **shot open** (`GameConfig.CRATE_HEALTH`; bullets and
+  blasts both count), and on breaking it `release`s its contents as `Loot`, which lies in the open
+  showing what it is and expires. `EnemyDrop` — sometimes left where an enemy died (rats more often
+  than mice), short-lived, and it drifts toward the nearest kitten who would want it.
+- **Effects:** `HealEffect`, `AmmoEffect`, and four buffs held on `ServerPlayer`: `DoubleDamageEffect`
+  (shots and blasts carry a damage scale, so it applies to what was fired while it ran),
+  `ShieldEffect` (points soaked before health, on a timer), `CatnipEffect` (the arsenal ticks at
+  double speed, so fire rate and reloads both double) and `NineLivesEffect` (the next lethal hit
+  leaves the kitten at `NINE_LIVES_HEALTH` with spawn grace). Going down clears every buff.
+  Effects are stateless; `PickupDirector` shares one instance of each across all pickups.
 
-- **A pickup is only consumed if it would do something.** A kitten at full health walks over a
-  medkit; one with every magazine full walks over a crate. `Pickup.tryCollect` asks
-  `ServerPlayer.wantsHealth`/`Arsenal.wantsAmmo` first, and kills the pickup the moment it is taken
-  so two players cannot share one. Collection is box overlap, not a radius.
-- **Reserve ammo is unlimited**, so what an ammo crate actually buys is the reload it skips —
-  `Arsenal.restock` tops up every magazine *and* cancels a reload in flight.
+Rules worth knowing before touching them:
+
+- **A pickup is only consumed if it would do something.** That is `PickupEffect.wanted`: a kitten at
+  full health walks over a medkit, one with full reserves over ammo, one already holding a spare life
+  over Nine Lives. `Pickup.tryCollect` asks it first, and kills the pickup the moment it is taken so
+  two players cannot share one. Collection is box overlap, not a radius.
+- **Crates stop bullets but not bodies.** Making them block movement would put them in the
+  predictor's world too, and a crate broken a tick earlier on the server would rubber-band whoever
+  stood behind it. Keep crates out of `Motion` unless prediction learns about them.
+- **Every pickup id comes from `GameWorld`'s one counter** (`PickupDirector` is handed it), because
+  crates, the loot they release and enemy drops are all created in different places.
+- **Ammo is finite except for the sidearm.** Every weapon has a `reserveCapacity`; slot 0 of each
+  family (pistol, slingshot) is `Weapon.UNLIMITED`, so a kitten is never unarmed. A reload moves
+  rounds from reserve to magazine, an ammo pickup restores `AMMO_PICKUP_SHARE` of each reserve, and
+  respawning (`Arsenal.restock`) refills everything. The client reads every slot's magazine and
+  reserve off the snapshot; pulling the trigger on an empty weapon clicks and switches to the
+  sidearm, client-side, because the slot is the client's to choose.
 
 ### Collision
 
@@ -441,12 +475,13 @@ Two rules are worth knowing before touching them:
   `WeaponFactory.FAMILIES`. Art mirrors the packages: a weapon's sprite key is `<family>/<name>`,
   resolving to `resources/weapons/<family>/<name>.png`.
 - **`Arsenal` is what one player carries**, and the only thing a factory hands out: the family, which
-  slot is drawn, per-weapon magazines, the reload timer and the fire cooldown. Its ammo state is
+  slot is drawn, per-weapon magazines and reserves, the reload timer and the fire cooldown. Its ammo state is
   server-authoritative — only `ServerPlayer` ticks an arsenal, and the client reads its own ammo and
   reload off the snapshot rather than simulating them. Its constructor is package-private, so
   `WeaponFactory.createArsenal()` is the only way to get one.
 - Entity id ranges keep kinds from colliding: players from 0, enemies from `ENEMY_ID_BASE`,
-  projectiles from `PROJECTILE_ID_BASE`, explosions from `EXPLOSION_ID_BASE`.
+  projectiles from `PROJECTILE_ID_BASE`, explosions from `EXPLOSION_ID_BASE`, pickups from
+  `PICKUP_ID_BASE`.
 - `GameConfig.FRIENDLY_FIRE` is a compile-time `false`, so the player-hit branches in `Projectile`
   and `GameWorld.explode` are currently dead code. That is intentional, not rot.
 - Player damage immunity (spawn grace and the post-hit i-frame) shares one timer on `ServerPlayer`

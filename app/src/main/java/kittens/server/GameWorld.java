@@ -15,6 +15,7 @@ import kittens.common.net.InputCommand;
 import kittens.common.net.PlayerInfo;
 import kittens.common.net.Snapshot;
 import kittens.common.sim.PathField;
+import kittens.common.weapon.Arsenal;
 import kittens.common.weapon.Weapon;
 import kittens.common.weapon.WeaponFactory;
 
@@ -34,6 +35,8 @@ final class GameWorld {
   private final PickupDirector pickupDirector = new PickupDirector();
   private int nextProjectileId = GameConfig.PROJECTILE_ID_BASE;
   private int nextExplosionId = GameConfig.EXPLOSION_ID_BASE;
+  /** Shared by crates, the loot they release and enemy drops, so their ids never collide. */
+  private int nextPickupId = GameConfig.PICKUP_ID_BASE;
   private long tick;
 
   GameWorld(TileMap map) {
@@ -70,7 +73,11 @@ final class GameWorld {
     }
   }
 
-  /** One fixed step: players, fire, pickups, spawns, enemies, projectiles, blasts, cull. */
+  /**
+   * One fixed step: players, fire, pickups, spawns, enemies, projectiles, blasts, cull. The cull is
+   * also where what died turns into what it leaves behind: a broken crate its contents, a killed
+   * enemy sometimes a drop. Every pickup is handled through {@link Pickup} alone, whatever it is.
+   */
   void tick(double dt) {
     tick++;
 
@@ -84,16 +91,16 @@ final class GameWorld {
     }
 
     for (Pickup pk : pickups) {
-      pk.tick(dt);
+      pk.tick(dt, map, players.values());
       for (ServerPlayer p : players.values()) {
         if (pk.tryCollect(p)) {
           break;
         }
       }
     }
-    Pickup dropped = pickupDirector.tick(dt, map, players.values(), pickups);
-    if (dropped != null) {
-      pickups.add(dropped);
+    SupplyCrate crate = pickupDirector.tick(dt, map, players.values(), pickups, this::nextPickupId);
+    if (crate != null) {
+      pickups.add(crate);
     }
 
     Enemy spawned = spawnDirector.tick(dt, map, players.values(), enemies);
@@ -115,21 +122,42 @@ final class GameWorld {
     }
 
     for (Projectile pr : projectiles) {
-      pr.tick(dt, map, players.values(), enemies);
+      pr.tick(dt, map, players.values(), enemies, pickups);
     }
     for (Projectile pr : projectiles) {
       if (pr.consumeExplosion()) {
-        explode(pr.pos(), pr.weapon());
+        explode(pr.pos(), pr.weapon(), pr.damageScale());
       }
     }
     for (Explosion ex : explosions) {
       ex.tick(dt);
     }
 
+    List<Pickup> leftBehind = new ArrayList<>();
+    for (Enemy enemy : enemies) {
+      if (!enemy.isAlive()) {
+        EnemyDrop drop = pickupDirector.dropFor(enemy, this::nextPickupId);
+        if (drop != null) {
+          leftBehind.add(drop);
+        }
+      }
+    }
+    for (Pickup pk : pickups) {
+      Pickup contents = pk.isAlive() ? null : pk.release(nextPickupId);
+      if (contents != null) {
+        nextPickupId++;
+        leftBehind.add(contents);
+      }
+    }
     projectiles.removeIf(pr -> !pr.isAlive());
     enemies.removeIf(e -> !e.isAlive());
     explosions.removeIf(ex -> !ex.isAlive());
     pickups.removeIf(pk -> !pk.isAlive());
+    pickups.addAll(leftBehind);
+  }
+
+  private int nextPickupId() {
+    return nextPickupId++;
   }
 
   private List<Vec2> alivePlayerPositions() {
@@ -142,26 +170,36 @@ final class GameWorld {
     return goals;
   }
 
-  /** Area blast: full damage at the centre easing to a quarter at the rim, plus outward knockback. */
-  private void explode(Vec2 center, Weapon weapon) {
+  /**
+   * Area blast: full damage at the centre easing to a quarter at the rim, plus outward knockback.
+   * Crates in range take it too.
+   */
+  private void explode(Vec2 center, Weapon weapon, double damageScale) {
     float radius = weapon.explosionRadius();
     float radiusSq = radius * radius;
+    double blast = weapon.explosionDamage() * damageScale;
     for (Enemy enemy : enemies) {
       Vec2 diff = enemy.pos().sub(center);
       float distSq = diff.lengthSq();
       if (!enemy.isAlive() || distSq > radiusSq) {
         continue;
       }
-      enemy.damage(weapon.explosionDamage() * falloff(distSq, radius));
+      enemy.damage(blast * falloff(distSq, radius));
       if (distSq > 1e-3f) {
         enemy.applyKnockback(diff.normalized().scale(GameConfig.PROJECTILE_KNOCKBACK * 1.6f));
+      }
+    }
+    for (Pickup pk : pickups) {
+      float distSq = pk.pos().sub(center).lengthSq();
+      if (pk.isAlive() && pk.shootable() && distSq <= radiusSq) {
+        pk.takeHit(blast * falloff(distSq, radius));
       }
     }
     if (GameConfig.FRIENDLY_FIRE) {
       for (ServerPlayer p : players.values()) {
         float distSq = p.pos().sub(center).lengthSq();
         if (p.isAlive() && distSq <= radiusSq) {
-          p.damage(weapon.explosionDamage() * falloff(distSq, radius));
+          p.damage(blast * falloff(distSq, radius));
         }
       }
     }
@@ -181,7 +219,8 @@ final class GameWorld {
     ThreadLocalRandom rnd = ThreadLocalRandom.current();
     for (int pellet = 0; pellet < w.pellets(); pellet++) {
       float angle = w.spread() > 0f ? base + (float) rnd.nextDouble(-w.spread(), w.spread()) : base;
-      projectiles.add(new Projectile(nextProjectileId++, shooter.id(), muzzle, angle, w, weaponId));
+      projectiles.add(new Projectile(nextProjectileId++, shooter.id(), muzzle, angle, w, weaponId,
+          shooter.damageScale()));
     }
     if (w.recoil() > 0f) {
       shooter.applyKnockback(aim.scale(-w.recoil()));
@@ -215,9 +254,17 @@ final class GameWorld {
     }
     ServerPlayer viewer = players.get(viewerId);
     if (viewer == null) {
-      return new Snapshot(tick, -1, entities, 0, 0f, wave, intermission, roster);
+      return new Snapshot(tick, -1, entities, 0, 0f, wave, intermission, roster, null, null, null);
     }
-    return new Snapshot(tick, viewer.lastProcessedSeq(), entities, viewer.arsenal().ammo(),
-        viewer.arsenal().reloadProgress(), wave, intermission, roster);
+    Arsenal arsenal = viewer.arsenal();
+    List<Integer> magazines = new ArrayList<>(arsenal.size());
+    List<Integer> reserves = new ArrayList<>(arsenal.size());
+    for (int slot = 0; slot < arsenal.size(); slot++) {
+      magazines.add(arsenal.ammo(slot));
+      reserves.add(arsenal.reserve(slot));
+    }
+    return new Snapshot(tick, viewer.lastProcessedSeq(), entities, arsenal.ammo(),
+        arsenal.reloadProgress(), wave, intermission, roster, magazines, reserves,
+        viewer.buffState());
   }
 }

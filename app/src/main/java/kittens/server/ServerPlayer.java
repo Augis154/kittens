@@ -5,6 +5,8 @@ import kittens.common.GameConfig;
 import kittens.common.entity.Actor;
 import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
+import kittens.common.net.Buff;
+import kittens.common.net.BuffState;
 import kittens.common.net.EntityKind;
 import kittens.common.net.EntityState;
 import kittens.common.net.InputCommand;
@@ -32,6 +34,12 @@ final class ServerPlayer extends Actor {
   /** Spawn grace and the post-hit i-frame share this one timer. */
   private double invulnerableTimer = GameConfig.RESPAWN_INVULNERABILITY;
   private long lastProcessedSeq = -1;
+  // Pickup buffs. All are lost when the kitten goes down.
+  private double doubleDamageTimer;
+  private double catnipTimer;
+  private double shieldPoints;
+  private double shieldTimer;
+  private boolean nineLives;
   /**
    * The one field written off the loop thread: a reader thread replaces it on a profile change, and
    * the loop reads it into each snapshot. Swapped whole, so a reader never sees a new name with an old
@@ -75,7 +83,14 @@ final class ServerPlayer extends Actor {
 
   void tick(double dt, TileMap map) {
     invulnerableTimer = Math.max(0, invulnerableTimer - dt);
-    arsenal.tick(dt);
+    doubleDamageTimer = Math.max(0, doubleDamageTimer - dt);
+    catnipTimer = Math.max(0, catnipTimer - dt);
+    shieldTimer = Math.max(0, shieldTimer - dt);
+    if (shieldTimer <= 0) {
+      shieldPoints = 0;
+    }
+    // Catnip runs the arsenal's clock at double speed: cooldowns and reloads both halve.
+    arsenal.tick(catnipTimer > 0 ? dt * 2 : dt);
 
     if (!isAlive()) {
       respawnTimer -= dt;
@@ -128,18 +143,107 @@ final class ServerPlayer extends Actor {
     return isAlive() && health < maxHealth;
   }
 
+  /** What this kitten's shots are multiplied by: 2 under Double Damage. */
+  double damageScale() {
+    return doubleDamageTimer > 0 ? 2.0 : 1.0;
+  }
+
+  /** Seconds left on a timed buff; 0 for one that is not running or not timed. */
+  double buffLeft(Buff buff) {
+    return switch (buff) {
+      case DOUBLE_DAMAGE -> doubleDamageTimer;
+      case CATNIP -> catnipTimer;
+      case SHIELD -> shieldTimer;
+      case NINE_LIVES -> 0;
+    };
+  }
+
+  /** Starts or refreshes a timed buff. */
+  void grant(Buff buff, double seconds) {
+    switch (buff) {
+      case DOUBLE_DAMAGE -> doubleDamageTimer = seconds;
+      case CATNIP -> catnipTimer = seconds;
+      default -> throw new IllegalArgumentException(buff + " is not a plain timed buff");
+    }
+  }
+
+  double shieldPoints() {
+    return shieldPoints;
+  }
+
+  void grantShield(double points, double seconds) {
+    shieldPoints = points;
+    shieldTimer = seconds;
+  }
+
+  boolean hasNineLives() {
+    return nineLives;
+  }
+
+  void grantNineLives() {
+    nineLives = true;
+  }
+
+  /**
+   * After spawn grace and the i-frame, a shield soaks the hit first; a blow the shield did not cover
+   * that would down the kitten spends Nine Lives instead, leaving it standing with fresh grace.
+   */
   @Override
   public void damage(double amount) {
-    if (!isAlive() || invulnerableTimer > 0) {
+    if (!isAlive() || invulnerableTimer > 0 || amount <= 0) {
+      return;
+    }
+    double soaked = Math.min(shieldPoints, amount);
+    shieldPoints -= soaked;
+    amount -= soaked;
+    if (shieldPoints <= 0) {
+      shieldTimer = 0;
+    }
+    if (amount > 0 && amount >= health && nineLives) {
+      nineLives = false;
+      health = GameConfig.NINE_LIVES_HEALTH;
+      invulnerableTimer = GameConfig.RESPAWN_INVULNERABILITY;
       return;
     }
     super.damage(amount);
     if (!isAlive()) {
       firing = false;
       respawnTimer = GameConfig.RESPAWN_DELAY;
+      clearBuffs();
     } else {
       invulnerableTimer = Math.max(invulnerableTimer, GameConfig.HIT_INVULNERABILITY);
     }
+  }
+
+  private void clearBuffs() {
+    doubleDamageTimer = 0;
+    catnipTimer = 0;
+    shieldPoints = 0;
+    shieldTimer = 0;
+    nineLives = false;
+  }
+
+  private int buffMask() {
+    int mask = 0;
+    if (doubleDamageTimer > 0) {
+      mask |= Buff.DOUBLE_DAMAGE.bit();
+    }
+    if (catnipTimer > 0) {
+      mask |= Buff.CATNIP.bit();
+    }
+    if (shieldPoints > 0) {
+      mask |= Buff.SHIELD.bit();
+    }
+    if (nineLives) {
+      mask |= Buff.NINE_LIVES.bit();
+    }
+    return mask;
+  }
+
+  /** This kitten's own buff detail, for its HUD. */
+  BuffState buffState() {
+    return new BuffState((float) doubleDamageTimer, (float) catnipTimer, (float) shieldPoints,
+        (float) shieldTimer, nineLives);
   }
 
   private void respawn() {
@@ -152,6 +256,6 @@ final class ServerPlayer extends Actor {
 
   EntityState toEntityState() {
     return new EntityState(id, EntityKind.CAT, pos.x, pos.y, (float) facing, (float) health,
-        arsenal.wireId(), (float) invulnerableTimer);
+        arsenal.wireId(), (float) invulnerableTimer, buffMask());
   }
 }
