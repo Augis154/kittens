@@ -1,6 +1,5 @@
 package kittens.client;
 
-import java.io.IOException;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -15,15 +14,16 @@ import kittens.common.net.InputCommand;
 import kittens.common.net.Join;
 import kittens.common.net.JoinAccepted;
 import kittens.common.net.Message;
-import kittens.common.net.MessageChannel;
 import kittens.common.net.PlayerInfo;
 import kittens.common.net.ProfileUpdate;
 import kittens.common.net.Snapshot;
+import kittens.common.net.Transport;
 import kittens.common.weapon.WeaponFactory;
 
 /**
  * The client's network half: joins, streams {@link InputCommand}s, and publishes the latest
- * snapshot as one immutable {@link Frame} so the EDT always reads a consistent picture.
+ * snapshot as one immutable {@link Frame} so the EDT always reads a consistent picture. It talks
+ * through a {@link Transport} and cannot tell a server across the network from one in this process.
  */
 final class GameClient {
   /** One received snapshot, with entities and the player roster indexed by id. */
@@ -50,7 +50,7 @@ final class GameClient {
     }
   }
 
-  private final MessageChannel channel;
+  private final Transport channel;
   private long inputSeq; // EDT only
   private volatile int myPlayerId = -1;
   private volatile Frame latest = Frame.EMPTY;
@@ -58,8 +58,8 @@ final class GameClient {
   private volatile TileMap map;
   private final CountDownLatch mapLatch = new CountDownLatch(1);
 
-  GameClient(String host, int port) throws IOException {
-    channel = MessageChannel.connect(host, port);
+  GameClient(Transport channel) {
+    this.channel = channel;
   }
 
   void start(WeaponFactory family) {
@@ -76,7 +76,7 @@ final class GameClient {
     channel.send(new ProfileUpdate(me.name(), me.color()));
   }
 
-  /** Drops the connection; the server removes the player when its reader sees the socket close. */
+  /** Drops the connection; the server removes the player when its reader sees it close. */
   void close() {
     channel.close();
   }

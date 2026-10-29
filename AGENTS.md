@@ -20,7 +20,9 @@ intent. Two constraints from it shape everything here:
    Singleton `Server`, `SoundSystem` and `Settings`, Command in `InputCommand`, Facade in `GameWorld`
    and `AudioControls`, Observer in `GameEvents`, Game Loop in `ServerLoop`, Flyweight cache in
    `AssetManager`, Factory and Prototype in `EnemyFactory` (managing and cloning `Enemy` archetypes),
-   Abstract Factory in `WeaponFactory`, and Builder in `TileMap`. Leave pattern labels accurate when
+   Abstract Factory in `WeaponFactory`, Builder in `TileMap`, and Adapter in the `common/net`
+   transports (`Transport`/`TransportListener`, each adapted over TCP and an in-process loopback).
+   Leave pattern labels accurate when
    touching those classes. Before/after class diagrams for the Abstract Factory, Observer and Facade
    additions are in `docs/`.
 
@@ -99,7 +101,10 @@ window is black, so `ffmpeg -f x11grab` captures nothing. Render the panel offsc
 a `Client` on the EDT, `setSize` it to its preferred size, and `paint()` it into a `BufferedImage`.
 No window ever has to be shown. Such a probe needs `package kittens.client` for `GameClient`, and
 Gson on the classpath — `find ~/.gradle/caches -name 'gson-*.jar'` finds the jar Gradle already
-downloaded. The server can run in the same JVM (`Server.main` on a daemon thread), and
+downloaded. Run the server in the same JVM through its loopback, not `Server.main`:
+`new GameClient(Server.getInstance().loopback().connect())` opens no port, so the probe still works
+while a dev server (or a server a previous probe left running) holds 7000 — `Server.main` would die
+with `BindException` there, and a TCP client would silently join that *other* world instead.
 `GameClient.latest()` gives the probe the authoritative position to assert against.
 
 Driving that panel has two non-obvious requirements. Add it to a `JFrame` and `pack()` it (still
@@ -111,22 +116,26 @@ are silently dropped and the kitten never moves while the rest of the frame look
 ## Architecture
 
 Three packages under `app/src/main/java/kittens/`, with a hard rule: **`common` contains no
-rendering, and the only socket code in it is `common/net/MessageChannel`** — the one place that
-knows the wire is newline-delimited JSON over TCP, used by both ends. Everything else in `common`
-is the shared simulation both sides run.
+rendering, and the only socket code in it is `common/net/TcpTransport` and `TcpListener`** — the
+TCP adapters behind `Transport`/`TransportListener` (see *Transports*), used by both ends. Everything
+else in `common` is the shared simulation both sides run.
 
 - **`common/`** — `math/` (`Vec2`, `Aabb`), `map/` (`TileMap` and its `Builder`, `Tile`,
   `LevelGenerator`), `entity/`
   (`GameObject` → `Actor` → `Enemy` → `Rat`/`Mouse`, `Prototype`, `EnemyFactory`, `MovementStrategy`), `weapon/`
   (`Weapon`, `WeaponFactory`, `Arsenal`; each family in its own subpackage — `standard/`, `scavenger/`),
   `sim/` (`Motion`, `PathField`),
-  `net/` (the DTOs, `EntityKind`, `MessageCodec`, `MessageChannel`), `GameConfig`.
-- **`server/`** — `Server` (accept loop + per-client reader threads), `ServerLoop`, `GameWorld`,
+  `net/` (the DTOs, `EntityKind`, `MessageCodec`, and the transports: `Transport`,
+  `TransportListener`, `TcpTransport`, `TcpListener`, `LoopbackTransport`, `LoopbackListener`),
+  `GameConfig`.
+- **`server/`** — `Server` (accept loop over any `TransportListener` + per-client reader threads),
+  `ServerLoop`, `GameWorld`,
   `ServerPlayer` (carries a `common.weapon.Arsenal`), `Projectile`, `Explosion`, `Pickup`,
   `SpawnDirector`, `PickupDirector`.
 - **`client/`** — `GameClient` (networking; publishes each snapshot as an immutable `Frame`),
   `Client` (window, timers, scene assembly; its `main` shows `ArsenalMenu` first and only connects
-  once a family is picked), `InputHandler` (keys, mouse, cursor), `Predictor`
+  once a family is picked — to the host, or offline to a `Server` started in the client's own
+  process), `InputHandler` (keys, mouse, cursor), `Predictor`
   (local-player prediction and reconciliation), `Camera` (viewport, follow, world/screen
   conversion), `WorldView` (between-snapshot smoothing, and diffing snapshots into game events),
   `Effects` and `SoundObserver` (the two observers that turn those events into visuals and sound),
@@ -232,6 +241,30 @@ Newline-delimited JSON over TCP (Gson), five message types only, modelled as a s
 records: `Join`, `JoinAccepted`, `InputCommand`, `Snapshot`, `ProfileUpdate`. `MessageCodec` wraps
 each in a `{"type":..,"data":..}` envelope so the DTOs stay plain data.
 
+### Transports
+
+Neither end touches a socket directly. `Server` and `GameClient` are written against two Adapter
+Targets in `common/net` — `Transport` (one connection: `send`, a blocking `readLoop`, `close`) and
+`TransportListener` (the server's `accept`) — and each has two adapters:
+
+- **TCP** — `TcpTransport` adapts a `Socket`'s byte streams (line framing, end-of-stream and
+  `IOException` become "closed"), `TcpListener` a `ServerSocket`. `Server.main` listens on
+  `GameConfig.PORT`; `TcpTransport.connect` is the client side.
+- **Loopback** — `LoopbackTransport` adapts a pair of `BlockingQueue`s, `LoopbackListener` a queue
+  of pending links; `LoopbackListener.connect` is the client side. `Server.getInstance().loopback()`
+  starts it on first use. This is what the menu's **Offline** mode joins (O toggles it), and what
+  probes should use.
+
+The loopback is deliberately wire-faithful, so code that works over it works over TCP: messages are
+still JSON-encoded through `MessageCodec`, each queue is bounded and `send` blocks when it is full
+(as a socket does when the peer's window fills), and both ends share one closed flag that the peer's
+`readLoop` notices after draining what was already queued — that is how the server sees an offline
+client leave. Queues have no end-of-stream, so blocked loopback reads, writes and accepts wake every
+50 ms to check for a close; messages themselves never wait on that.
+
+One `Server` can listen on several transports at once and feeds them all into the one world (the
+loop starts with the first), which is why player ids come from an `AtomicInteger`.
+
 Who a player *is* travels apart from where they are. `Join` and `ProfileUpdate` carry a name and a
 kitten colour; the server cleans the name (`GameConfig.cleanName`), resolves the colour
 (`GameConfig.kittenColor`, where "auto" or anything unknown means join order), and every `Snapshot`
@@ -265,16 +298,18 @@ the wire stays consistent automatically.
 
 ### Threading
 
-- **Server:** main thread accepts sockets; one reader thread per client (`client-<id>`) runs
-  `MessageChannel.readLoop` and queues inputs into `ServerPlayer.inbox` (a
+- **Server:** the main thread accepts TCP clients, and the `server-accept` daemon thread loopback
+  ones (only once `loopback()` is first called); one reader thread per client (`client-<id>`) runs
+  `Transport.readLoop` and queues inputs into `ServerPlayer.inbox` (a
   `ConcurrentLinkedQueue`); the `server-loop` thread drains them and owns all mutation.
   `GameWorld.players` is the only concurrent collection, because `addPlayer`/`removePlayer` arrive
   from reader threads. The one field a reader thread writes on a live player is
   `ServerPlayer.info`, a volatile `PlayerInfo` replaced whole by `ProfileUpdate`; enemies, projectiles, explosions and pickups are plain lists touched by the
   loop thread only. Keep it that way — adding a concurrent collection there implies a threading
   rule that does not exist.
-- **Snapshot writes happen on the loop thread** and end in a blocking `flush()`. A merely *slow*
-  client (full TCP window, not disconnected) will stall the whole simulation. A per-connection
+- **Snapshot writes happen on the loop thread** and block when the client's side is full — a
+  blocking `flush()` over TCP, a full bounded queue over the loopback. A merely *slow* client (not
+  disconnected) will stall the whole simulation. A per-connection
   outbound queue is the fix if this ever bites.
 - **Client:** the `client-net` reader thread publishes each snapshot as one immutable
   `GameClient.Frame` through a single volatile, so a render frame never sees half a snapshot;
@@ -488,4 +523,8 @@ Not bugs to fix on sight — context so you don't mistake them for accidents:
   constant `LevelGenerator` cannot see, so on a level whose rooms sit close every wave takes the
   "farthest point" fallback and arrives in view. Measured over 3000 seeds the closest pair of entrances
   ranges from 256 to 560 px against the 520 px threshold.
+- **An offline server lives as long as the client process.** `Server` is a Singleton, so a client
+  can host one offline world, and nothing stops it; that is fine only because there is no way back
+  to the menu. It also opens no port, so friends cannot join an offline match — offline means
+  offline. A lobby that returns to the menu needs a way to close the loopback and reset the world.
 - Guava is a declared dependency but unused.

@@ -22,10 +22,12 @@ import kittens.common.weapon.Weapon;
 import kittens.common.weapon.WeaponFactory;
 
 /**
- * The screen shown before the socket opens: one card per {@link WeaponFactory}, picked by number
- * key, arrows + Enter, or click. The {@link Chooser} does the connecting, which takes a while, so the
- * menu shows "Connecting…" and ignores further picks until the chooser calls its {@code fail}
- * callback (or the game replaces this panel). EDT only, including {@code fail}.
+ * The screen shown before connecting: one card per {@link WeaponFactory}, picked by number key,
+ * arrows + Enter, or click, plus a toggle (O or the button) between joining the server at
+ * {@code host} and playing offline against a server in this process. The {@link Chooser} does the
+ * connecting, which takes a while, so the menu shows progress and ignores further picks until the
+ * chooser calls its {@code fail} callback (or the game replaces this panel). EDT only, including
+ * {@code fail}.
  */
 final class ArsenalMenu extends JPanel {
   private static final int CARD_W = 400;
@@ -37,20 +39,24 @@ final class ArsenalMenu extends JPanel {
   private final List<WeaponFactory> families = WeaponFactory.families();
   private final AssetManager assets;
   private final Chooser onChoose;
+  private final String host;
   private int highlight;
   private String error;
   private boolean connecting;
+  private boolean offline;
   private Runnable onSettings = () -> { };
-  /** Where the settings button was last drawn, for clicks. */
+  /** Where the settings and mode buttons were last drawn, for clicks. */
   private Rectangle settingsButton = new Rectangle();
+  private Rectangle modeButton = new Rectangle();
 
   /** Starts joining with {@code family}; must call {@code fail} (on the EDT) if it cannot. */
   interface Chooser {
-    void choose(WeaponFactory family, Consumer<String> fail);
+    void choose(WeaponFactory family, boolean offline, Consumer<String> fail);
   }
 
-  ArsenalMenu(AssetManager assets, Dimension size, Chooser onChoose) {
+  ArsenalMenu(AssetManager assets, Dimension size, String host, Chooser onChoose) {
     this.assets = assets;
+    this.host = host;
     this.onChoose = onChoose;
     highlight = Math.max(0, families.indexOf(WeaponFactory.named(Settings.get().profile().arsenal())));
     setPreferredSize(size);
@@ -78,6 +84,10 @@ final class ArsenalMenu extends JPanel {
           openSettings();
           return;
         }
+        if (modeButton.contains(e.getX(), e.getY())) {
+          toggleMode();
+          return;
+        }
         int hit = cardAt(e.getX(), e.getY());
         if (hit >= 0) {
           choose(hit);
@@ -100,9 +110,22 @@ final class ArsenalMenu extends JPanel {
     }
   }
 
+  /** Not while connecting: the join already under way has picked its mode. */
+  private void toggleMode() {
+    if (!connecting) {
+      offline = !offline;
+      error = null;
+      repaint();
+    }
+  }
+
   private void onKey(int code) {
     if (code == KeyEvent.VK_S) {
       openSettings();
+      return;
+    }
+    if (code == KeyEvent.VK_O) {
+      toggleMode();
       return;
     }
     int digit = code - KeyEvent.VK_1;
@@ -128,7 +151,7 @@ final class ArsenalMenu extends JPanel {
     connecting = true;
     error = null;
     repaint();
-    onChoose.choose(families.get(index), message -> {
+    onChoose.choose(families.get(index), offline, message -> {
       connecting = false;
       error = message;
       repaint();
@@ -170,13 +193,26 @@ final class ArsenalMenu extends JPanel {
 
     int footerY = getHeight() - 36;
     if (connecting) {
-      centered(g, "Connecting…", Theme.FONT_LABEL, footerY - 26, Theme.ACCENT);
+      centered(g, offline ? "Starting offline match…" : "Connecting to " + host + "…",
+          Theme.FONT_LABEL, footerY - 26, Theme.ACCENT);
     } else if (error != null) {
       centered(g, error, Theme.FONT_LABEL, footerY - 26, Theme.DANGER);
     }
-    centered(g, "Press 1-" + families.size() + " or click   ·   ←/→ and Enter   ·   S settings",
+    centered(g, "Press 1-" + families.size()
+        + " or click   ·   ←/→ and Enter   ·   O online/offline   ·   S settings",
         Theme.FONT_SMALL, footerY, Theme.TEXT_FAINT);
     drawSettingsButton(g);
+    drawModeButton(g);
+  }
+
+  private void drawModeButton(Graphics2D g) {
+    String label = (offline ? "Offline" : "Online: " + host) + "  ·  O";
+    int w = Theme.textWidth(g, Theme.FONT_LABEL, label) + 28;
+    modeButton = new Rectangle(20, 20, w, 34);
+    Theme.panel(g, modeButton.x, modeButton.y, modeButton.width, modeButton.height);
+    g.setFont(Theme.FONT_LABEL);
+    Theme.shadowedText(g, label, modeButton.x + 14, modeButton.y + 22,
+        offline ? Theme.ACCENT : Theme.TEXT_DIM);
   }
 
   private void drawSettingsButton(Graphics2D g) {

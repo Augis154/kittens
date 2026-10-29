@@ -26,8 +26,10 @@ import kittens.common.GameConfig;
 import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
 import kittens.common.net.EntityState;
+import kittens.common.net.TcpTransport;
 import kittens.common.weapon.Weapon;
 import kittens.common.weapon.WeaponFactory;
+import kittens.server.Server;
 
 /**
  * The game window: wires {@link InputHandler}, {@link Predictor}, {@link WorldView}, {@link Camera},
@@ -249,14 +251,18 @@ public final class Client extends JPanel {
 
   /**
    * Connects with the chosen arsenal, waits for the server's level, then swaps the menu for the
-   * game. The wait blocks, so it runs off the EDT; every outcome is handed back onto it.
+   * game. The wait blocks, so it runs off the EDT; every outcome is handed back onto it. Offline
+   * starts the server in this process and joins it over the loopback; from there on the game cannot
+   * tell the difference.
    */
-  private static void join(JFrame frame, String host, WeaponFactory family,
+  private static void join(JFrame frame, String host, WeaponFactory family, boolean offline,
       Consumer<String> fail) {
     Thread joiner = new Thread(() -> {
       GameClient net = null;
       try {
-        net = new GameClient(host, GameConfig.PORT);
+        net = new GameClient(offline
+            ? Server.getInstance().loopback().connect()
+            : TcpTransport.connect(host, GameConfig.PORT));
         net.start(family);
         TileMap level = net.awaitMap(5000);
         GameClient joined = net;
@@ -267,7 +273,8 @@ public final class Client extends JPanel {
           game.requestFocusInWindow();
         });
       } catch (IOException e) {
-        SwingUtilities.invokeLater(() -> fail.accept("Cannot reach " + host + ":" + GameConfig.PORT));
+        String where = offline ? "the offline server" : host + ":" + GameConfig.PORT;
+        SwingUtilities.invokeLater(() -> fail.accept("Cannot reach " + where));
       } catch (InterruptedException | IllegalStateException e) {
         if (net != null) {
           net.close(); // otherwise the server keeps an idle kitten for a client that gave up
@@ -286,8 +293,8 @@ public final class Client extends JPanel {
     SwingUtilities.invokeLater(() -> {
       JFrame frame = new JFrame("Kittens");
       AssetManager assets = new AssetManager();
-      ArsenalMenu menu = new ArsenalMenu(assets, windowSize(),
-          (family, fail) -> join(frame, host, family, fail));
+      ArsenalMenu menu = new ArsenalMenu(assets, windowSize(), host,
+          (family, offline, fail) -> join(frame, host, family, offline, fail));
       menu.onSettings(() -> showSettings(frame, menu, assets, false, () -> { }));
       frame.add(menu);
       frame.pack();

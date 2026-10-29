@@ -10,27 +10,29 @@ import java.nio.charset.StandardCharsets;
 import java.util.function.Consumer;
 
 /**
- * One socket carrying newline-delimited JSON {@link Message}s, used by both ends. {@link #send} may
- * be called from any thread; {@link #readLoop} blocks and belongs on a reader thread.
+ * {@link Transport} over a TCP socket (Adapter pattern): the socket offers byte streams, so this
+ * frames each {@link Message} as one line of JSON and turns end-of-stream and {@code IOException}
+ * into a closed transport. Used by both ends.
  */
-public final class MessageChannel {
+public final class TcpTransport implements Transport {
   private final Socket socket;
   private final BufferedReader in;
   private final BufferedWriter out;
   private volatile boolean open = true;
 
-  public MessageChannel(Socket socket) throws IOException {
+  TcpTransport(Socket socket) throws IOException {
     this.socket = socket;
     socket.setTcpNoDelay(true);
     in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
     out = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
   }
 
-  public static MessageChannel connect(String host, int port) throws IOException {
-    return new MessageChannel(new Socket(host, port));
+  public static TcpTransport connect(String host, int port) throws IOException {
+    return new TcpTransport(new Socket(host, port));
   }
 
-  /** Writes and flushes one message; a failed write closes the channel. */
+  /** Blocks while the peer's receive window is full, which is what stalls the loop on a slow client. */
+  @Override
   public synchronized void send(Message message) {
     if (!open) {
       return;
@@ -44,7 +46,7 @@ public final class MessageChannel {
     }
   }
 
-  /** Delivers decoded messages until the socket closes; undecodable lines are logged and skipped. */
+  @Override
   public void readLoop(Consumer<Message> onMessage) {
     try {
       String line;
@@ -68,6 +70,7 @@ public final class MessageChannel {
     }
   }
 
+  @Override
   public void close() {
     open = false;
     try {
