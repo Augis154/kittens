@@ -13,17 +13,14 @@ intent. Two constraints from it shape everything here:
 
 1. **No game framework or engine.** Rendering, netcode, collision, and the game loop are all
    hand-written on purpose. Do not propose pulling in LibGDX, LWJGL, Netty, etc.
-2. **23 OOP design patterns must eventually be implemented**, added gradually over months. The
-   prototype is deliberately pattern-free, written to leave *seams* where patterns will later go.
-   **Do not refactor code into design patterns unless asked.** Keeping the core free of rendering
-   and socket code is the thing that preserves those seams. Where a pattern already fell out of
-   the structure it is named in that class's comment (Template Method / Strategy seam in `Enemy`,
-   Singleton weapons shared by every `Arsenal`, Singleton `Server`, Singleton `SoundSystem`,
-   Singleton `Settings`,
-   Command in `InputCommand`, Facade in `GameWorld`,
-   Game Loop in `ServerLoop`, Flyweight cache in `AssetManager`, Factory in `SpawnDirector`,
-   Abstract Factory in `WeaponFactory`, Builder in `TileMap`); leave those labels accurate when
-   touching the class.
+2. **23 OOP design patterns must eventually be implemented**, added gradually over months.
+   **Do not refactor code into additional design patterns unless asked.** Keep the core free of
+   rendering and socket code so later patterns have clean seams. Strategy now selects enemy movement
+   in `Enemy`; other patterns already present include Singleton weapons shared by every `Arsenal`,
+   Singleton `Server`, `SoundSystem` and `Settings`, Command in `InputCommand`, Facade in `GameWorld`,
+   Game Loop in `ServerLoop`, Flyweight cache in `AssetManager`, Factory in `EnemyFactory`, Abstract
+   Factory in `WeaponFactory`, and Builder in `TileMap`. Leave pattern labels accurate when touching
+   those classes.
 
 ## Keeping this file current
 
@@ -118,8 +115,9 @@ is the shared simulation both sides run.
 
 - **`common/`** — `math/` (`Vec2`, `Aabb`), `map/` (`TileMap` and its `Builder`, `Tile`,
   `LevelGenerator`), `entity/`
-  (`GameObject` → `Actor` → `Enemy` → `Rat`/`Mouse`, `EnemyFactory`), `weapon/`
-  (`Weapon`, `WeaponFactory`, `Arsenal`; each family in its own subpackage — `standard/`, `scavenger/`), `sim/` (`Motion`, `PathField`),
+  (`GameObject` → `Actor` → `Enemy` → `Rat`/`Mouse`, `EnemyFactory`, `MovementStrategy`), `weapon/`
+  (`Weapon`, `WeaponFactory`, `Arsenal`; each family in its own subpackage — `standard/`, `scavenger/`),
+  `sim/` (`Motion`, `PathField`),
   `net/` (the DTOs, `EntityKind`, `MessageCodec`, `MessageChannel`), `GameConfig`.
 - **`server/`** — `Server` (accept loop + per-client reader threads), `ServerLoop`, `GameWorld`,
   `ServerPlayer` (carries a `common.weapon.Arsenal`), `Projectile`, `Explosion`, `Pickup`,
@@ -259,8 +257,15 @@ the wire stays consistent automatically.
 
 ### Enemy AI
 
-`Enemy.computeMoveDirection` is the designated AI seam. `Rat` chases; `Mouse` chases with sinusoidal
-weaving. Both go through two base-class helpers:
+`Enemy.tick` delegates its movement direction to a per-enemy `MovementStrategy`. Rats spawn with
+`PursuitMovementStrategy` and mice with `WeavingMovementStrategy`, which keeps its own phase so mice
+weave out of sync. After the first melee attack that actually damages a player, the same enemy
+reports that first successful bite to `GameWorld`, which assigns `HitAndRunMovementStrategy` (rat) or
+`OrbitMovementStrategy` (mouse); spawn grace and post-hit immunity do not trigger the switch. `Enemy`
+only executes its assigned strategy and never chooses its replacement. These variants keep the same
+`EntityKind` and sprite. The hit-and-run strategy tracks its own retreat time after each attack,
+independent of the melee cooldown. The strategies use base-class steering helpers, while `Enemy.tick`
+still owns separation, knockback, collision and melee attacks:
 
 - `steerToward` is a **hybrid**: charge straight at the target when the body has a clear line
   (sampled with the enemy's own size, so a rat needs a wider gap than a mouse), and otherwise follow

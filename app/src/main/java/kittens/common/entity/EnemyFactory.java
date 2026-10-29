@@ -13,7 +13,6 @@ import kittens.common.net.EntityKind;
  * instantiation, completely decoupling callers from specific enemy classes and composition rules.
  */
 public class EnemyFactory {
-
   /** Weighted entry for probabilistic enemy selection. */
   public record SpawnWeight(EntityKind kind, double weight) {
     public SpawnWeight {

@@ -76,6 +76,14 @@ public final class GameConfig {
   public static final float ENEMY_SEPARATION_SLACK = 1.3f;
   /** Cap on the summed push: lets a formed pile prise apart without flinging anyone across the map. */
   public static final float ENEMY_SEPARATION_MAX = 3.0f;
+  /** Distance at which an orbiting enemy starts steering sideways instead of taking a direct route. */
+  public static final float ENEMY_ORBIT_START_DISTANCE = 72f;
+  /** How strongly an orbiting enemy corrects its distance from the player. */
+  public static final float ENEMY_ORBIT_RADIAL_WEIGHT = 1.5f;
+  /** How far a hit-and-run enemy tries to withdraw after a swing. */
+  public static final float ENEMY_RETREAT_DISTANCE = 160f;
+  /** A time limit so a blocked retreat eventually gives way to pursuit. */
+  public static final double ENEMY_RETREAT_TIME = 2.0;
 
   /** Knockback impulse (px/s) on bullet hit, and its decay rate per second. */
   public static final float PROJECTILE_KNOCKBACK = 160.0f;

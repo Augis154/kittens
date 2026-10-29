@@ -6,6 +6,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import kittens.common.GameConfig;
 import kittens.common.entity.Enemy;
+import kittens.common.entity.HitAndRunMovementStrategy;
+import kittens.common.entity.OrbitMovementStrategy;
 import kittens.common.map.TileMap;
 import kittens.common.math.Vec2;
 import kittens.common.net.EntityState;
@@ -102,7 +104,13 @@ final class GameWorld {
       // One field per tick, shared by every enemy: cheaper than caching it correctly, never stale.
       PathField pursuit = PathField.toward(map, alivePlayerPositions());
       for (Enemy enemy : enemies) {
-        enemy.tick(dt, map, pursuit, players.values(), enemies);
+        if (enemy.tick(dt, map, pursuit, players.values(), enemies)) {
+          switch (enemy.kind()) {
+            case RAT -> enemy.setMovementStrategy(new HitAndRunMovementStrategy());
+            case MOUSE -> enemy.setMovementStrategy(new OrbitMovementStrategy());
+            default -> throw new IllegalStateException("unsupported enemy kind: " + enemy.kind());
+          }
+        }
       }
     }
 

@@ -1,6 +1,7 @@
 package kittens.common.entity;
 
 import java.util.Collection;
+import java.util.Objects;
 import kittens.common.GameConfig;
 import kittens.common.map.TileMap;
 import kittens.common.math.Aabb;
@@ -11,9 +12,9 @@ import kittens.common.sim.Motion;
 import kittens.common.sim.PathField;
 
 /**
- * Computer-controlled enemy. {@link #tick} is a Template Method: the movement decision is the
- * abstract {@link #computeMoveDirection}, which is the seam where per-enemy Strategy objects will
- * plug in. Enemies slide against walls and living players but pass through each other.
+ * Computer-controlled enemy. Movement intent comes from a {@link MovementStrategy}; this class
+ * applies shared separation, knockback, collision and melee rules. Enemies slide against walls and
+ * living players but pass through each other.
  */
 public abstract class Enemy extends Actor {
   /** Radians between successive ids when fanning a stack apart; never repeats a direction. */
@@ -24,29 +25,37 @@ public abstract class Enemy extends Actor {
   protected final double attackDamage;
   protected final double attackCooldownTime;
   protected double attackCooldown;
+  private MovementStrategy movementStrategy;
+  private boolean hasLandedBite;
 
   public Enemy(int id, Vec2 pos, Vec2 size, double maxHealth, float speed, double attackDamage,
-      double attackCooldownTime, EntityKind kind) {
+      double attackCooldownTime, EntityKind kind, MovementStrategy movementStrategy) {
     super(id, pos, size, maxHealth);
     this.speed = speed;
     this.attackDamage = attackDamage;
     this.attackCooldownTime = attackCooldownTime;
     this.kind = kind;
+    this.movementStrategy = Objects.requireNonNull(movementStrategy, "movementStrategy must not be null");
   }
 
   public EntityKind kind() {
     return kind;
   }
 
-  public void tick(double dt, TileMap map, PathField pursuit, Collection<? extends Actor> targets,
+  public void setMovementStrategy(MovementStrategy movementStrategy) {
+    this.movementStrategy = Objects.requireNonNull(movementStrategy, "movementStrategy must not be null");
+  }
+
+  /** Returns true only when this tick lands the first bite that actually damages a target. */
+  public boolean tick(double dt, TileMap map, PathField pursuit, Collection<? extends Actor> targets,
       Collection<? extends Enemy> enemies) {
     if (!isAlive()) {
-      return;
+      return false;
     }
     attackCooldown = Math.max(0, attackCooldown - dt);
     decayKnockback(dt);
 
-    Vec2 chase = computeMoveDirection(map, pursuit, targets, dt);
+    Vec2 chase = movementStrategy.direction(this, map, pursuit, targets, dt);
     if (chase.lengthSq() > 1e-8f) {
       facing = Math.atan2(chase.y, chase.x); // face the quarry, not whoever is shoving us
     }
@@ -66,12 +75,18 @@ public abstract class Enemy extends Actor {
       Aabb reach = Aabb.fromCenter(pos, size.add(Vec2.of(8f, 8f)));
       for (Actor target : targets) {
         if (target.isAlive() && reach.intersects(target.bounds())) {
+          double healthBeforeBite = target.health();
           target.damage(attackDamage);
           attackCooldown = attackCooldownTime;
+          if (!hasLandedBite && target.health() < healthBeforeBite) {
+            hasLandedBite = true;
+            return true;
+          }
           break;
         }
       }
     }
+    return false;
   }
 
   private static boolean touchesLiving(Aabb box, Collection<? extends Actor> actors) {
@@ -82,10 +97,6 @@ public abstract class Enemy extends Actor {
     }
     return false;
   }
-
-  /** The AI seam: the desired (normalized) movement direction for this tick. */
-  protected abstract Vec2 computeMoveDirection(TileMap map, PathField pursuit,
-      Collection<? extends Actor> targets, double dt);
 
   /**
    * A push out of the neighbours' personal space with inverse falloff, keeping its magnitude (capped)
