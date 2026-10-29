@@ -47,6 +47,10 @@ public class Actor extends GameObject {
     return health;
   }
 
+  public double maxHealth() {
+    return maxHealth;
+  }
+
   public double facing() {
     return facing;
   }

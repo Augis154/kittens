@@ -19,9 +19,10 @@ intent. Two constraints from it shape everything here:
    in `Enemy`; other patterns already present include Singleton weapons shared by every `Arsenal`,
    Singleton `Server`, `SoundSystem` and `Settings`, Command in `InputCommand`, Facade in `GameWorld`
    and `AudioControls`, Observer in `GameEvents`, Game Loop in `ServerLoop`, Flyweight cache in
-   `AssetManager`, Factory in `EnemyFactory`, Abstract Factory in `WeaponFactory`, and Builder in
-   `TileMap`. Leave pattern labels accurate when touching those classes. Before/after class diagrams
-   for the Abstract Factory, Observer and Facade additions are in `docs/`.
+   `AssetManager`, Factory and Prototype in `EnemyFactory` (managing and cloning `Enemy` archetypes),
+   Abstract Factory in `WeaponFactory`, and Builder in `TileMap`. Leave pattern labels accurate when
+   touching those classes. Before/after class diagrams for the Abstract Factory, Observer and Facade
+   additions are in `docs/`.
 
 ## Keeping this file current
 
@@ -116,7 +117,7 @@ is the shared simulation both sides run.
 
 - **`common/`** — `math/` (`Vec2`, `Aabb`), `map/` (`TileMap` and its `Builder`, `Tile`,
   `LevelGenerator`), `entity/`
-  (`GameObject` → `Actor` → `Enemy` → `Rat`/`Mouse`, `EnemyFactory`, `MovementStrategy`), `weapon/`
+  (`GameObject` → `Actor` → `Enemy` → `Rat`/`Mouse`, `Prototype`, `EnemyFactory`, `MovementStrategy`), `weapon/`
   (`Weapon`, `WeaponFactory`, `Arsenal`; each family in its own subpackage — `standard/`, `scavenger/`),
   `sim/` (`Motion`, `PathField`),
   `net/` (the DTOs, `EntityKind`, `MessageCodec`, `MessageChannel`), `GameConfig`.
@@ -313,7 +314,8 @@ correctly at this map size and is never stale.
 
 `SpawnDirector` runs the wave clock: an intermission, then one enemy at a time until the wave's budget
 is spent, then it waits for every enemy to die before the next intermission. `EnemyFactory` picks the
-kind from a per-wave weighted table; enemy stats never scale, only count, mix and cadence do.
+kind from a per-wave weighted table and creates it by cloning registered archetype prototypes
+(Prototype pattern); enemy stats never scale, only count, mix and cadence do.
 
 **Difficulty scales with the number of connected players**, by `PER_PLAYER_SCALE` (1.5) compounding per
 extra player: x1, x1.5, x2.25, x3.375. That multiplier ("pressure") applies to three things together —

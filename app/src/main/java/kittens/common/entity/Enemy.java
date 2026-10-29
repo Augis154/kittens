@@ -2,6 +2,7 @@ package kittens.common.entity;
 
 import java.util.Collection;
 import java.util.Objects;
+import java.util.function.Function;
 import kittens.common.GameConfig;
 import kittens.common.map.TileMap;
 import kittens.common.math.Aabb;
@@ -15,8 +16,11 @@ import kittens.common.sim.PathField;
  * Computer-controlled enemy. Movement intent comes from a {@link MovementStrategy}; this class
  * applies shared separation, knockback, collision and melee rules. Enemies slide against walls and
  * living players but pass through each other.
+ *
+ * <p>Implements {@link Prototype} (Prototype pattern) so runtime enemies can be spawned by cloning
+ * pre-configured archetypes rather than hardcoding concrete subclass instantiation.
  */
-public abstract class Enemy extends Actor {
+public abstract class Enemy extends Actor implements Prototype<Enemy> {
   /** Radians between successive ids when fanning a stack apart; never repeats a direction. */
   private static final double GOLDEN_ANGLE = 2.399963229728653;
 
@@ -24,22 +28,59 @@ public abstract class Enemy extends Actor {
   protected final float speed;
   protected final double attackDamage;
   protected final double attackCooldownTime;
+  protected final Function<Integer, MovementStrategy> initialStrategyFactory;
   protected double attackCooldown;
   private MovementStrategy movementStrategy;
   private boolean hasLandedBite;
 
   public Enemy(int id, Vec2 pos, Vec2 size, double maxHealth, float speed, double attackDamage,
-      double attackCooldownTime, EntityKind kind, MovementStrategy movementStrategy) {
+      double attackCooldownTime, EntityKind kind, Function<Integer, MovementStrategy> strategyFactory) {
     super(id, pos, size, maxHealth);
     this.speed = speed;
     this.attackDamage = attackDamage;
     this.attackCooldownTime = attackCooldownTime;
-    this.kind = kind;
-    this.movementStrategy = Objects.requireNonNull(movementStrategy, "movementStrategy must not be null");
+    this.kind = Objects.requireNonNull(kind, "kind must not be null");
+    this.initialStrategyFactory = Objects.requireNonNull(strategyFactory, "strategyFactory must not be null");
+    this.movementStrategy = Objects.requireNonNull(strategyFactory.apply(id), "movementStrategy must not be null");
   }
+
+  public Enemy(int id, Vec2 pos, Vec2 size, double maxHealth, float speed, double attackDamage,
+      double attackCooldownTime, EntityKind kind, MovementStrategy movementStrategy) {
+    this(id, pos, size, maxHealth, speed, attackDamage, attackCooldownTime, kind,
+        ignoredId -> movementStrategy);
+  }
+
+  protected Enemy(Enemy prototype, int id, Vec2 pos) {
+    super(id, pos, prototype.size, prototype.maxHealth);
+    this.speed = prototype.speed;
+    this.attackDamage = prototype.attackDamage;
+    this.attackCooldownTime = prototype.attackCooldownTime;
+    this.kind = prototype.kind;
+    this.initialStrategyFactory = prototype.initialStrategyFactory;
+    this.movementStrategy = Objects.requireNonNull(prototype.initialStrategyFactory.apply(id),
+        "movementStrategy must not be null");
+  }
+
+  @Override
+  public abstract Enemy clone(int id, Vec2 pos);
+
+  @Override
+  public abstract Enemy copy();
 
   public EntityKind kind() {
     return kind;
+  }
+
+  public float speed() {
+    return speed;
+  }
+
+  public double attackDamage() {
+    return attackDamage;
+  }
+
+  public double attackCooldownTime() {
+    return attackCooldownTime;
   }
 
   public void setMovementStrategy(MovementStrategy movementStrategy) {
