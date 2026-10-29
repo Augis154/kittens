@@ -18,9 +18,8 @@ import java.util.List;
 import java.util.function.IntConsumer;
 import java.util.function.Supplier;
 import javax.swing.JPanel;
-import kittens.client.audio.Sound;
-import kittens.client.audio.SoundSystem;
 import kittens.client.settings.Action;
+import kittens.client.audio.AudioControls;
 import kittens.client.settings.AudioPrefs;
 import kittens.client.settings.DisplayPrefs;
 import kittens.client.settings.KeyBindings;
@@ -132,14 +131,13 @@ final class SettingsMenu extends JPanel {
     rows.add(new Row(0, "AUDIO", "Volume", () -> Math.round(audio.volume() * 100) + "%", null,
         dir -> {
           if (dir > 0) {
-            audio.louder();
+            AudioControls.louder();
           } else {
-            audio.quieter();
+            AudioControls.quieter();
           }
-          sample();
         }, null));
     rows.add(new Row(0, null, "Sound", () -> audio.muted() ? "Off" : "On", null,
-        dir -> toggleSound(), this::toggleSound));
+        dir -> AudioControls.toggleMute(), AudioControls::toggleMute));
     rows.add(new Row(0, "DISPLAY", "Window scale",
         () -> trim(settings.display().renderScale()) + "×", "next launch",
         dir -> settings.setDisplay(new DisplayPrefs(
@@ -269,17 +267,6 @@ final class SettingsMenu extends JPanel {
   private void cancelCapture() {
     capturing = null;
     mode = Mode.BROWSE;
-  }
-
-  private void toggleSound() {
-    if (!settings.audio().toggleMuted()) {
-      sample();
-    }
-  }
-
-  /** A click at the new level, so the player hears what they picked. */
-  private static void sample() {
-    SoundSystem.get().play(Sound.SWITCH);
   }
 
   private int rowAt(int x, int y) {

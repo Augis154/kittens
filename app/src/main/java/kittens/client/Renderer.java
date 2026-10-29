@@ -37,6 +37,7 @@ final class Renderer {
       Map<Integer, EntityState> entities,
       int myPlayerId,
       WorldView view,
+      Effects effects,
       Vec2 predicted,
       float aimAngle,
       Weapon localWeapon,
@@ -54,7 +55,7 @@ final class Renderer {
   void draw(Graphics2D g, Scene scene) {
     drawMap(g, scene.tiles());
     drawEntities(g, scene);
-    drawEffects(g, scene.view());
+    drawEffects(g, scene.effects());
   }
 
   // ---- map ------------------------------------------------------------------
@@ -142,7 +143,7 @@ final class Renderer {
     }
     for (EntityState e : entities.values()) {
       if (e.kind().isEnemy()) {
-        drawEnemy(g, e, view.positionOf(e), view.hitFlash(e.id()));
+        drawEnemy(g, e, view.positionOf(e), scene.effects().hitFlash(e.id()));
       }
     }
     for (EntityState e : entities.values()) {
@@ -400,10 +401,10 @@ final class Renderer {
 
   // ---- effects --------------------------------------------------------------
 
-  private void drawEffects(Graphics2D g, WorldView view) {
+  private void drawEffects(Graphics2D g, Effects effects) {
     Composite baseComposite = g.getComposite();
     Stroke baseStroke = g.getStroke();
-    for (WorldView.Fx fx : view.effects()) {
+    for (Effects.Fx fx : effects.active()) {
       float t = fx.progress();
       int cx = Math.round(fx.pos.x);
       int cy = Math.round(fx.pos.y);

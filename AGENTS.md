@@ -17,10 +17,11 @@ intent. Two constraints from it shape everything here:
    **Do not refactor code into additional design patterns unless asked.** Keep the core free of
    rendering and socket code so later patterns have clean seams. Strategy now selects enemy movement
    in `Enemy`; other patterns already present include Singleton weapons shared by every `Arsenal`,
-   Singleton `Server`, `SoundSystem` and `Settings`, Command in `InputCommand`, Facade in `GameWorld`,
-   Game Loop in `ServerLoop`, Flyweight cache in `AssetManager`, Factory in `EnemyFactory`, Abstract
-   Factory in `WeaponFactory`, and Builder in `TileMap`. Leave pattern labels accurate when touching
-   those classes.
+   Singleton `Server`, `SoundSystem` and `Settings`, Command in `InputCommand`, Facade in `GameWorld`
+   and `AudioControls`, Observer in `GameEvents`, Game Loop in `ServerLoop`, Flyweight cache in
+   `AssetManager`, Factory in `EnemyFactory`, Abstract Factory in `WeaponFactory`, and Builder in
+   `TileMap`. Leave pattern labels accurate when touching those classes. Before/after class diagrams
+   for the Abstract Factory, Observer and Facade additions are in `docs/`.
 
 ## Keeping this file current
 
@@ -126,11 +127,16 @@ is the shared simulation both sides run.
   `Client` (window, timers, scene assembly; its `main` shows `ArsenalMenu` first and only connects
   once a family is picked), `InputHandler` (keys, mouse, cursor), `Predictor`
   (local-player prediction and reconciliation), `Camera` (viewport, follow, world/screen
-  conversion), `WorldView` (between-snapshot smoothing + cosmetic effects), `Renderer` (arena
-  drawing), `Hud` (screen-space overlay), `Theme` (palette, fonts, panel/text primitives),
-  `AssetManager`, and the two menus: `ArsenalMenu` (pick an arsenal, then join) and `SettingsMenu`.
-- **`client/audio/`** — `SoundSystem` (the public entry point), `Sound`, and the package-private
-  `SoundBank` (synthesis), `Mixer` (the output line) and `Voice` (one playing sound).
+  conversion), `WorldView` (between-snapshot smoothing, and diffing snapshots into game events),
+  `Effects` and `SoundObserver` (the two observers that turn those events into visuals and sound),
+  `Renderer` (arena drawing), `Hud` (screen-space overlay), `Theme` (palette, fonts, panel/text
+  primitives), `AssetManager`, and the two menus: `ArsenalMenu` (pick an arsenal, then join) and
+  `SettingsMenu`.
+- **`client/events/`** — the Observer machinery: `GameEvent` (a sealed family of records),
+  `GameObserver` and `GameEvents` (the subject observers subscribe to).
+- **`client/audio/`** — `SoundSystem` (the public entry point), `Sound`, `AudioControls` (a Facade
+  over the audio setting and the output), and the package-private `SoundBank` (synthesis), `Mixer`
+  (the output line) and `Voice` (one playing sound).
 - **`client/settings/`** — `Settings` (the public entry point) and its sections `Profile`,
   `KeyBindings` (with the `Action` enum), `AudioPrefs` and `DisplayPrefs`; `SettingsStore` is the
   file.
@@ -187,6 +193,30 @@ Everything the local player does *not* control is smoothed by `WorldView` instea
 and enemies are eased exponentially toward their snapshot positions, and bullets are dead-reckoned
 from their angle and weapon speed. The split matters — prediction is reconciled against authority
 and lives in `Predictor`, while `WorldView` is cosmetic and can be retuned without desync risk.
+`WorldView` is also where the client notices that something happened — a new bullet, a health drop, a
+vanished pickup — and it publishes each as a `GameEvent` instead of reacting itself.
+
+### Events
+
+`GameEvents` is the subject (Observer pattern) and `GameObserver` the interface. `Client` subscribes
+two observers: `Effects` (muzzle flashes, hit sparks, floating damage numbers, pickup rings, the
+white flash on a struck enemy) and `SoundObserver` (the event-to-sound table, `cueFor`). `WorldView`
+publishes what it sees in snapshots; `Client` publishes the two events only it can see,
+`PlayerHurt` and `ReloadStarted`, read off the local kitten's own snapshot.
+
+- **A reaction to something that happened is a new observer, not a line in `WorldView`.** That class
+  must stay free of `SoundSystem` and of effect state; that coupling is what the bus replaced.
+- `GameEvent` is sealed, so an observer that switches over it without a `default` stops compiling when
+  an event is added — `SoundObserver` does that on purpose, while `Effects` has a `default` because it
+  only cares about three. A new event is a record, published from the one place that detects it, and
+  handled by whichever observers care.
+- Delivery is synchronous on the publishing thread, which is the Swing EDT. A throwing observer is
+  logged and skipped so it cannot starve the others or stop the frame loop. Events are client-only:
+  nothing here crosses the wire, and the server has no equivalent.
+- `Effects.advance(dt)` runs after `WorldView.update` each frame, so an effect born this frame ages by
+  this frame's `dt`.
+- Feedback that is not a world event — the click on a weapon switch or a volume change — is not an
+  event; it is played directly, or through `AudioControls`.
 
 **The critical invariant:** `common/sim/Motion` is the *single* movement model. Its player overload
 is run by both `ServerPlayer.tick` and `Predictor` with the same fixed `GameConfig.TICK_DT` step,
@@ -396,9 +426,15 @@ Two rules are worth knowing before touching them:
 `SoundSystem` is the one owner of the sound device, reached through `SoundSystem.get()` rather than
 threaded through constructors. `SoundBank` synthesizes every `Sound` in code (there are no audio
 files), and `Mixer` mixes all voices in software into a single `SourceDataLine` instead of opening a
-`Clip` per shot. Cues are raised from `WorldView`, `Client` and `InputHandler`, where the client
-already detects the events. `Sound.shotFor` keys on the weapon wire id, so it follows the
-`WeaponFactory` role order like the hotkeys and HUD slots do.
+`Clip` per shot. World cues are played by `SoundObserver` in response to `GameEvent`s (see Events); the
+click that confirms a weapon switch is played directly. `Sound.shotFor` keys on the weapon's slot, so
+it follows the `WeaponFactory` role order like the hotkeys and HUD slots do.
+
+`AudioControls` is a Facade over `AudioPrefs` and `SoundSystem`: `louder()`, `quieter()` and
+`toggleMute()` change the setting (which saves it) and play the confirmation click — at the new
+level, and on unmuting but not on muting, since nothing would be heard. The keyboard shortcuts and the
+settings menu both go through it, so any new way to change volume or mute should too. It covers
+*changing* audio only; the menu still reads `AudioPrefs.volume()` and `muted()` to display them.
 
 Pass `-Dkittens.audio=off` to a probe that builds a `Client`, or it opens the real device and
 plays through the speakers.

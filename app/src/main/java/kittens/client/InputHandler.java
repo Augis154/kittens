@@ -11,10 +11,10 @@ import java.util.Map;
 import java.util.Set;
 import javax.swing.JComponent;
 import javax.swing.Timer;
+import kittens.client.audio.AudioControls;
 import kittens.client.audio.Sound;
 import kittens.client.audio.SoundSystem;
 import kittens.client.settings.Action;
-import kittens.client.settings.AudioPrefs;
 import kittens.client.settings.KeyBindings;
 import kittens.client.settings.Settings;
 import kittens.common.weapon.Weapon;
@@ -143,20 +143,16 @@ final class InputHandler {
       }
       return;
     }
-    AudioPrefs audio = Settings.get().audio();
     if (keys.is(Action.MUTE, code)) {
-      if (!audio.toggleMuted()) {
-        SoundSystem.get().play(Sound.SWITCH); // audible confirmation it came back on
-      }
+      AudioControls.toggleMute();
       return;
     }
-    if (keys.is(Action.VOLUME_DOWN, code) || keys.is(Action.VOLUME_UP, code)) {
-      if (keys.is(Action.VOLUME_UP, code)) {
-        audio.louder();
-      } else {
-        audio.quieter();
-      }
-      SoundSystem.get().play(Sound.SWITCH); // a sample at the new level
+    if (keys.is(Action.VOLUME_UP, code)) {
+      AudioControls.louder();
+      return;
+    }
+    if (keys.is(Action.VOLUME_DOWN, code)) {
+      AudioControls.quieter();
       return;
     }
     if (keys.is(Action.RELOAD, code)) {

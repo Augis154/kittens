@@ -17,8 +17,9 @@ import javax.swing.JFrame;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
-import kittens.client.audio.Sound;
 import kittens.client.audio.SoundSystem;
+import kittens.client.events.GameEvent;
+import kittens.client.events.GameEvents;
 import kittens.client.settings.DisplayPrefs;
 import kittens.client.settings.Settings;
 import kittens.common.GameConfig;
@@ -48,7 +49,9 @@ public final class Client extends JPanel {
   private final Camera camera;
   private final Renderer renderer;
   private final Hud hud = new Hud(assets);
-  private final WorldView view = new WorldView();
+  private final GameEvents events = new GameEvents();
+  private final Effects effects = new Effects();
+  private final WorldView view = new WorldView(events);
   private final Predictor predictor;
   private final InputHandler input;
   private final GameClient client;
@@ -69,6 +72,8 @@ public final class Client extends JPanel {
     this.camera = new Camera(map, RENDER_SCALE);
     this.renderer = new Renderer(map, assets);
     this.predictor = new Predictor(map);
+    events.subscribe(effects);
+    events.subscribe(new SoundObserver(SoundSystem.get()));
     setPreferredSize(new Dimension(camera.windowWidth(), camera.windowHeight()));
     setBackground(Theme.FLOOR);
     setFocusable(true);
@@ -152,22 +157,23 @@ public final class Client extends JPanel {
     EntityState mine = f.entity(me);
     predictor.update(dt, f, mine, input.moveX(), input.moveY());
     view.update(dt, f.entities(), me);
+    effects.advance(dt);
     Vec2 target = cameraTarget(f);
     camera.follow(target, dt);
     SoundSystem.get().listenAt(target);
-    cueLocalSounds(f, mine);
+    publishLocalEvents(f, mine);
     recoilBloom = Math.max(0f, recoilBloom - (float) (BLOOM_DECAY * dt));
   }
 
-  /** The local kitten's own cues, which come off the snapshot rather than from anything seen. */
-  private void cueLocalSounds(GameClient.Frame f, EntityState mine) {
+  /** The local kitten's own events, which come off the snapshot rather than from anything seen. */
+  private void publishLocalEvents(GameClient.Frame f, EntityState mine) {
     float hp = mine == null ? Float.NaN : mine.hp();
     if (hp < heardHp) {
-      SoundSystem.get().play(Sound.HURT);
+      events.publish(new GameEvent.PlayerHurt());
     }
     heardHp = hp;
     if (f.reload() > 0f && heardReload <= 0f) {
-      SoundSystem.get().play(Sound.RELOAD);
+      events.publish(new GameEvent.ReloadStarted());
     }
     heardReload = f.reload();
   }
@@ -221,7 +227,7 @@ public final class Client extends JPanel {
 
   private Renderer.Scene scene() {
     GameClient.Frame f = client.latest();
-    return new Renderer.Scene(f.entities(), client.myPlayerId(), view,
+    return new Renderer.Scene(f.entities(), client.myPlayerId(), view, effects,
         predictor.position(), aimAngle(), input.weapon(), camera.visibleTiles(), f.players());
   }
 
