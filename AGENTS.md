@@ -22,7 +22,8 @@ intent. Two constraints from it shape everything here:
    `AssetManager`, Factory and Prototype in `EnemyFactory` (managing and cloning `Enemy` archetypes),
    Abstract Factory in `WeaponFactory`, Builder in `TileMap`, Adapter in the `common/net`
    transports (`Transport`/`TransportListener`, each adapted over TCP and an in-process loopback),
-   and Bridge in the pickups (`Pickup` deliveries × `PickupEffect` effects, see *Pickups*).
+   Bridge in the pickups (`Pickup` deliveries × `PickupEffect` effects, see *Pickups*),
+   and Decorator in the client's kitten appearance (`CatRenderer` layers).
    Leave pattern labels accurate when
    touching those classes. Before/after class diagrams for the Abstract Factory, Observer and Facade
    additions are in `docs/`.
@@ -141,6 +142,8 @@ else in `common` is the shared simulation both sides run.
   process), `InputHandler` (keys, mouse, cursor), `Predictor`
   (local-player prediction and reconciliation), `Camera` (viewport, follow, world/screen
   conversion), `WorldView` (between-snapshot smoothing, and diffing snapshots into game events),
+  `CatAppearance` (per-player Decorator chains selected from authoritative HP and fading blood
+  trails), `CatRenderer`/`BasicCatRenderer` and the wound decorators (client-only sprite layers),
   `Effects` and `SoundObserver` (the two observers that turn those events into visuals and sound),
   `Renderer` (arena drawing), `Hud` (screen-space overlay), `Theme` (palette, fonts, panel/text
   primitives), `AssetManager`, and the two menus: `ArsenalMenu` (pick an arsenal, then join) and
@@ -435,9 +438,11 @@ Rules worth knowing before touching them:
 
 - **Presentation goes through `client/Theme`, not literals.** Colours, fonts, and the panel/text
   primitives live there; it is client-only and deliberately *not* in `GameConfig`, which is for
-  numbers both simulations must agree on. New drawing belongs in `Renderer` (world) or `Hud`
-  (overlay), and anything that has to move between snapshots belongs in `WorldView` — `Renderer` is
-  a pure function of a `Renderer.Scene` and owns no mutable state.
+  numbers both simulations must agree on. World drawing belongs in `Renderer`, kitten sprite
+  layers in `CatRenderer` decorators, and screen overlays in `Hud`. Remote entity smoothing and event
+  detection belong in `WorldView`; kitten wound layers
+  and their fading floor marks belong in `CatAppearance`. It updates on the EDT before painting;
+  `Renderer` is a pure function of a `Renderer.Scene` and owns no mutable state.
 - **Two coordinate spaces per frame, and `Camera` owns the conversion.** `Client.paintComponent`
   applies the camera (which offsets by the viewport and scales by `DisplayPrefs.renderScale`), draws the arena
   in world coordinates, then restores the transform and hands `Hud` the native window size so HUD

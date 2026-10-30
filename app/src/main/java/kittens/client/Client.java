@@ -54,6 +54,7 @@ public final class Client extends JPanel {
   private final GameEvents events = new GameEvents();
   private final Effects effects = new Effects();
   private final WorldView view = new WorldView(events);
+  private final CatAppearance cats = new CatAppearance();
   private final Predictor predictor;
   private final InputHandler input;
   private final GameClient client;
@@ -166,6 +167,7 @@ public final class Client extends JPanel {
     EntityState mine = f.entity(me);
     predictor.update(dt, f, mine, input.moveX(), input.moveY());
     view.update(dt, f.entities(), me);
+    cats.update(dt, f.entities(), me, view, predictor.position());
     effects.advance(dt);
     Vec2 target = cameraTarget(f);
     camera.follow(target, dt);
@@ -243,7 +245,7 @@ public final class Client extends JPanel {
   private Renderer.Scene scene() {
     GameClient.Frame f = client.latest();
     return new Renderer.Scene(f.entities(), client.myPlayerId(), view, effects,
-        predictor.position(), aimAngle(), input.weapon(), camera.visibleTiles(), f.players());
+        predictor.position(), aimAngle(), input.weapon(), camera.visibleTiles(), f.players(), cats);
   }
 
   private Hud.View hudView() {

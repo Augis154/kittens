@@ -21,6 +21,10 @@ final class Theme {
   static final Color SPAWN_MARK = new Color(72, 128, 104, 120);
   static final Color WALL_SHADOW = new Color(0, 0, 0, 90);
   static final Color ACTOR_SHADOW = new Color(0, 0, 0, 70);
+  static final Color SCRATCH_SHADOW = new Color(81, 45, 45);
+  static final Color SCRATCH = new Color(229, 169, 149);
+  static final Color BLOOD_DARK = new Color(91, 17, 29);
+  static final Color BLOOD = new Color(195, 37, 54);
 
   // ---- accents --------------------------------------------------------------
 

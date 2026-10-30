@@ -45,7 +45,8 @@ final class Renderer {
       float aimAngle,
       Weapon localWeapon,
       Tiles tiles,
-      Map<Integer, PlayerInfo> players) {}
+      Map<Integer, PlayerInfo> players,
+      CatAppearance cats) {}
 
   private final TileMap map;
   private final AssetManager assets;
@@ -57,6 +58,7 @@ final class Renderer {
 
   void draw(Graphics2D g, Scene scene) {
     drawMap(g, scene.tiles());
+    scene.cats().drawTrail(g);
     drawEntities(g, scene);
     drawEffects(g, scene.effects());
   }
@@ -154,17 +156,17 @@ final class Renderer {
     for (EntityState e : entities.values()) {
       if (e.kind() == EntityKind.CAT && e.id() != me) {
         drawKitten(g, e, view.positionOf(e), e.angle(), WeaponFactory.decode(e.weaponId()), false,
-            scene.players().get(e.id()));
+            scene.players().get(e.id()), scene.cats());
       }
     }
     EntityState mine = entities.get(me);
     if (mine != null) {
       if (scene.predicted() != null) {
         drawKitten(g, mine, scene.predicted(), scene.aimAngle(), scene.localWeapon(), true,
-            scene.players().get(me));
+            scene.players().get(me), scene.cats());
       } else {
         drawKitten(g, mine, Vec2.of(mine.x(), mine.y()), mine.angle(),
-            WeaponFactory.decode(mine.weaponId()), true, scene.players().get(me));
+            WeaponFactory.decode(mine.weaponId()), true, scene.players().get(me), scene.cats());
       }
     }
     for (EntityState e : entities.values()) {
@@ -370,7 +372,7 @@ final class Renderer {
 
   /** {@code who} is null only for the moment before the first roster arrives. */
   private void drawKitten(Graphics2D g, EntityState state, Vec2 at, float angle, Weapon weapon,
-      boolean self, PlayerInfo who) {
+      boolean self, PlayerInfo who, CatAppearance cats) {
     int id = state.id();
     String name = who != null ? who.name() : "P" + id;
     String color = who != null ? who.color() : GameConfig.kittenSprite(id);
@@ -390,6 +392,9 @@ final class Renderer {
       nameplate(g, name, at.x, y - 6, Theme.TEXT_DIM);
       return;
     }
+
+    // The third wound tier adds a floor shadow below the kitten and its aim ring.
+    cats.drawBloodShadow(g, id, Math.round(at.x), Math.round(at.y + t * 0.34f));
 
     if (self) {
       // Short aim guide and a floor ring, instead of a bright line to the cursor.
@@ -424,7 +429,7 @@ final class Renderer {
       float pulse = (float) (0.5 + 0.5 * Math.sin(System.nanoTime() / 1e9 * rate));
       g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.35f + 0.5f * pulse));
     }
-    drawFlipped(g, assets.kitten(color), x, y, t, facingLeft);
+    cats.forPlayer(id).draw(g, new CatRenderer.Pose(at, assets.kitten(color), facingLeft));
 
     // Weapon rotated around the kitten toward the aim.
     int w = 22;
